@@ -7,6 +7,16 @@ data/
 *.env
 .env.local
 *.env.local
+# Install/upgrade scripts write timestamped .env backups NEXT TO the file they
+# upsert, and those backups carry DATABASE_URL, PORTAL_IDENTITY_SECRET and
+# LANE_GATEWAY_KEY. The *.env rule does not match .env.bak-20260803-213121,
+# so without these they show up as untracked in a repo with a writable fork
+# remote. This
+# lived in .git/info/exclude, which exists on exactly one host and in no repo --
+# the same host-only-config class that has bitten this deployment repeatedly.
+.env.bak-*
+*.env.bak-*
+*.env.bak
 *.tfstate
 *.tfstate.*
 .terraform/
