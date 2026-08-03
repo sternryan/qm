@@ -1,6 +1,6 @@
 import { relative } from "node:path";
 import type { ScopeId } from "../../types.ts";
-import type { HarnessModelUtilities } from "../../harness/harness.ts";
+import type { ModelsForScope } from "../../harness/harness.ts";
 import type { WorkspaceStore } from "../../workspace/workspace-store.ts";
 import { type MemoryService, ccCaptureToPersonal, ccTargetFor } from "../memory-service.ts";
 import type { MemoryStrategy } from "../strategy.ts";
@@ -60,7 +60,9 @@ function recentDates(now: number, days: number): string[] {
 }
 
 export interface ScratchPromoteDeps {
-  harness: HarnessModelUtilities;
+  // ⚠ FAB-1: resolved fresh per scope in flushBurst()/maintain() below, never
+  // read as a fixed table -- see ModelsForScope's doc.
+  harness: ModelsForScope;
   memory: MemoryService;
   workspace: WorkspaceStore;
   consolidateAfter: number;
@@ -160,7 +162,8 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
 
   async function flushBurst(burst: Burst): Promise<void> {
     const autonomous = isAutonomousBurst(burst);
-    const facts = await extractFacts(deps.harness, burst.turns, { autonomous });
+    const models = await deps.harness(burst.scopeId);
+    const facts = await extractFacts(models, burst.turns, { autonomous });
     if (!facts.length) return;
     const at = Date.now();
     await perScope(burst.scopeId, () => memory.capture(burst.scopeId, facts, at));
@@ -182,16 +185,19 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
     async maintain(scopeId) {
       const now = Date.now();
       const window = await readLogWindow(scopeId, now, LOG_RETENTION_DAYS);
-      if (window.length && deps.harness.oneShot) {
-        const longTerm = stripMarker(await base.read(scopeId));
-        const scratch = window.map(({ date, body }) => `## ${date}\n${body}`).join("\n\n");
-        const out = (
-          (await deps.harness.oneShot(
-            PROMOTION_PROMPT,
-            `Current notebook:\n${longTerm || "(empty)"}\n\nScratch log:\n${scratch}`,
-          )) ?? ""
-        ).trim();
-        if (out && !/^none$/i.test(out)) await base.replace(scopeId, out);
+      if (window.length) {
+        const models = await deps.harness(scopeId);
+        if (models.oneShot) {
+          const longTerm = stripMarker(await base.read(scopeId));
+          const scratch = window.map(({ date, body }) => `## ${date}\n${body}`).join("\n\n");
+          const out = (
+            (await models.oneShot(
+              PROMOTION_PROMPT,
+              `Current notebook:\n${longTerm || "(empty)"}\n\nScratch log:\n${scratch}`,
+            )) ?? ""
+          ).trim();
+          if (out && !/^none$/i.test(out)) await base.replace(scopeId, out);
+        }
       }
       const cutoff = dateStr(now - LOG_RETENTION_DAYS * 86_400_000);
       for (const abs of await workspace.list(scopeId)) {

@@ -1,5 +1,5 @@
 import type { ScopeId } from "../../types.ts";
-import type { HarnessModelUtilities } from "../../harness/harness.ts";
+import type { ModelsForScope } from "../../harness/harness.ts";
 import type { MemoryService } from "../memory-service.ts";
 import { createKeyedQueue } from "../../util/async.ts";
 import { bulletText, captureDate, dateStr, isBullet } from "../notebook.ts";
@@ -120,7 +120,9 @@ export interface Consolidator {
 }
 
 export function createConsolidator(deps: {
-  harness: HarnessModelUtilities;
+  // ⚠ FAB-1: resolved fresh per scopeId in maintain() below, never read as a
+  // fixed table -- see ModelsForScope's doc.
+  harness: ModelsForScope;
   memory: MemoryService;
   afterN?: number;
   now?: () => number;
@@ -132,7 +134,9 @@ export function createConsolidator(deps: {
   const log = deps.log ?? ((msg: string) => console.error(msg));
   const degraded = new Set<ScopeId>();
   async function maintain(scopeId: ScopeId): Promise<void> {
-    if (degraded.has(scopeId) || !deps.harness.oneShot) return;
+    if (degraded.has(scopeId)) return;
+    const models = await deps.harness(scopeId);
+    if (!models.oneShot) return;
     const body = await deps.memory.read(scopeId);
     const bullets = body.split("\n").filter(isBullet);
     if (!bullets.length) return;
@@ -140,7 +144,7 @@ export function createConsolidator(deps: {
     const numbered = bullets.map((l, i) => `${i + 1}. ${bulletText(l)}`).join("\n");
     let out: string | undefined;
     try {
-      out = await deps.harness.oneShot(MEMORY_CONSOLIDATION_PROMPT, numbered);
+      out = await models.oneShot(MEMORY_CONSOLIDATION_PROMPT, numbered);
     } catch {
       return;
     }

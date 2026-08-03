@@ -184,6 +184,16 @@ export interface Harness {
   tools: HarnessToolPresentation;
 }
 
+// Shared shape for a per-scope model resolver, used by call sites that capture
+// a Harness's models ONCE into a closure at construction time instead of per
+// call (memory strategies, ambient-judge, Slack ack-emoji picking) -- those
+// closures previously read `harness.models` directly, which is the org
+// fallback harness's table regardless of the scope actually being served.
+// Callers should build this as `(scopeLabel) => harness.modelsFor ?
+// harness.modelsFor(scopeLabel) : harness.models` once, at wiring time, and
+// invoke it fresh for every scope-bearing operation.
+export type ModelsForScope = (scopeLabel: ScopeId) => Promise<HarnessModelUtilities>;
+
 export type HarnessImplementation = HarnessTurnController & HarnessModelUtilities;
 
 export function defineHarness(

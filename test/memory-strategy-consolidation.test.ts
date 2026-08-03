@@ -16,7 +16,7 @@ import {
   parseConsolidationActions,
 } from "../src/memory/strategies/consolidation.ts";
 import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
-import type { HarnessModelUtilities } from "../src/harness/harness.ts";
+import type { HarnessModelUtilities, ModelsForScope } from "../src/harness/harness.ts";
 
 const SCOPE = "user:U1";
 const AT = Date.UTC(2026, 5, 10);
@@ -26,13 +26,17 @@ function freshMemory() {
   return { workspace, memory: createMemoryService(workspace) };
 }
 
-function oneShotHarness(reply: string, calls?: Array<{ system: string; prompt: string }>): HarnessModelUtilities {
-  return {
+function resolverFor(models: HarnessModelUtilities): ModelsForScope {
+  return async () => models;
+}
+
+function oneShotHarness(reply: string, calls?: Array<{ system: string; prompt: string }>): ModelsForScope {
+  return resolverFor({
     oneShot(system, prompt) {
       calls?.push({ system, prompt });
       return Promise.resolve(reply);
     },
-  };
+  });
 }
 
 test("parseConsolidationActions: UPDATE/DELETE/ADD in, NONE/prose/malformed out", () => {
@@ -101,10 +105,10 @@ test("bulletsBelowMarker: counts all bullets when never consolidated, only post-
 test("marker bookkeeping end-to-end: per-turn strategy consolidates once the after-N trigger fires, and not before", async () => {
   const { workspace, memory } = freshMemory();
   let turn = 0;
-  const harness: HarnessModelUtilities = {
+  const harness = resolverFor({
     oneShot: (system: string) =>
       Promise.resolve(system === MEMORY_CONSOLIDATION_PROMPT ? "NONE" : `- fact number ${++turn}`),
-  };
+  });
   const consolidator = createConsolidator({ harness, memory, afterN: 3, now: () => AT })!;
   const { memory: consolidating } = createConsolidatingMemory(memory, consolidator);
   const strategy = createPerTurnStrategy({ harness, memory: consolidating });
@@ -148,9 +152,9 @@ test("a one-shot failure leaves the notebook untouched — consolidation is best
   const { workspace, memory } = freshMemory();
   await memory.capture(SCOPE, ["a fact"], AT);
   const before = await workspace.read(SCOPE, MEMORY_FILE);
-  const harness: HarnessModelUtilities = {
+  const harness = resolverFor({
     oneShot: () => Promise.reject(new Error("model down")),
-  };
+  });
   await createConsolidator({ harness, memory })!.maintain(SCOPE);
   assert.equal(await workspace.read(SCOPE, MEMORY_FILE), before);
 });
@@ -202,4 +206,26 @@ test("a stale marker from an earlier consolidation does not mask a no-op replace
   await consolidator.maintain(SCOPE);
   assert.equal(logs.length, 1);
   assert.match(logs[0]!, /consolidation disabled/);
+});
+
+// FAB-1: createConsolidator's harness dep is a per-scope resolver, not a
+// fixed HarnessModelUtilities -- consolidate() must resolve maintain()'s OWN
+// scopeId's models on every call, never a harness captured once at
+// construction time. Before this fix deps.harness was a plain object and
+// could not vary by scope at all -- this test would fail to compile against
+// that shape, and would catch a regression that resolves the same models
+// (and skips it correctly under afterN=0-shaped test setups) for every scope.
+test("FAB-1: maintain() resolves the scope passed to it, not a fixed harness — two scopes hit two different resolvers", async () => {
+  const seenScopes: string[] = [];
+  const { memory } = freshMemory();
+  await memory.capture("user:A", ["fact a"], AT);
+  await memory.capture("user:B", ["fact b"], AT);
+  const harness = async (scopeId: string) => {
+    seenScopes.push(scopeId);
+    return { oneShot: () => Promise.resolve("NONE") };
+  };
+  const consolidator = createConsolidator({ harness, memory, now: () => AT })!;
+  await consolidator.maintain("user:A");
+  await consolidator.maintain("user:B");
+  assert.deepEqual(seenScopes, ["user:A", "user:B"], "the resolver is called with each maintain() call's own scope");
 });

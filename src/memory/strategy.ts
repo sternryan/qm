@@ -1,5 +1,5 @@
 import type { ScopeId } from "../types.ts";
-import type { HarnessModelUtilities } from "../harness/harness.ts";
+import type { ModelsForScope } from "../harness/harness.ts";
 import type { MemoryService } from "./memory-service.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { createPerTurnStrategy } from "./strategies/per-turn.ts";
@@ -34,7 +34,12 @@ export function parseMemoryStrategyKind(value: string | undefined): MemoryStrate
 }
 
 export interface MemoryStrategyDeps {
-  harness: HarnessModelUtilities;
+  // ⚠ FAB-1: a resolver, not a fixed HarnessModelUtilities -- memory
+  // consolidation/extraction runs for every scope, including scheduled ones,
+  // so it must resolve the calling scope's own harness/model pin (via
+  // harness-router's modelsFor) rather than capturing the boot harness once.
+  // See harness.ts's ModelsForScope doc for the shape wiring.ts builds.
+  harness: ModelsForScope;
   memory: MemoryService;
   workspace: WorkspaceStore;
   consolidateAfter?: number;

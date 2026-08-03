@@ -181,7 +181,7 @@ class FakeCore implements SlackCoreClient {
   readonly turns: any[] = [];
   readonly ingests: any[][] = [];
   readonly directories: any[] = [];
-  readonly ackPicks: Array<{ text: string; candidates: readonly string[] }> = [];
+  readonly ackPicks: Array<{ text: string; candidates: readonly string[]; channel: string }> = [];
   externalParticipants = false;
   result: TurnResult = { status: "ok", reply: "agent reply" };
   submitError: Error | undefined;
@@ -208,8 +208,8 @@ class FakeCore implements SlackCoreClient {
   async readFileArtifact(): Promise<Buffer> {
     return Buffer.alloc(0);
   }
-  async pickAckEmoji(text: string, candidates: readonly string[]): Promise<undefined> {
-    this.ackPicks.push({ text, candidates });
+  async pickAckEmoji(text: string, candidates: readonly string[], channel: string): Promise<undefined> {
+    this.ackPicks.push({ text, candidates, channel });
     return undefined;
   }
   async recordAckPick(): Promise<void> {}

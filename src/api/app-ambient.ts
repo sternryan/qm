@@ -1,4 +1,5 @@
 import type { TurnRequest } from "../types.ts";
+import { scopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { samePerson } from "../directory/person.ts";
@@ -46,6 +47,11 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
     opts?: { reason?: "messages" | "scheduled" },
   ): Promise<AmbientDecision> {
     if (!deps.surfaceCache || !deps.ambientJudge) return { act: false };
+    // ⚠ FAB-1: the container's own scope, resolved fresh per call at the
+    // wiring layer (deps.ambientJudge) -- never the org fallback harness,
+    // which is what a boot-captured judge closure would silently use
+    // regardless of what this channel is actually pinned to.
+    const scopeLabel = scopeId("channel", container);
     const scheduled = opts?.reason === "scheduled";
     const policy = await deps.channelPolicy?.get(container);
     const cursorKey = `${orgIdOf()}:${surface}:${container}`;
@@ -151,7 +157,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
       const botTs = new Set(rawDelta.filter((m) => m.bot).map((m) => m.ts));
       decision = await judgeAmbientBatch(
         {
-          judge: deps.ambientJudge,
+          judge: (s: string, pr: string) => deps.ambientJudge!(scopeLabel, s, pr),
           spawnWorker: (b: AmbientBatch, d: AmbientDecision) =>
             spawnAmbientWorker(
               { ...b, messages: b.messages.map((m) => (botTs.has(m.ts) && !m.bot ? { ...m, bot: true } : m)) },

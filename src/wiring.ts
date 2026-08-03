@@ -167,7 +167,7 @@ import { createCodexHarness, codexHarnessConfigOptions } from "./harness/codex-h
 import { createClaudeHarness, claudeHarnessConfigOptions } from "./harness/claude-harness.ts";
 import { createPiHarness, piHarnessConfigOptions } from "./harness/pi-harness.ts";
 import { createHarnessRouter, resolveRuntimeChoiceDurable } from "./harness/harness-router.ts";
-import type { Harness } from "./harness/harness.ts";
+import type { Harness, HarnessModelUtilities } from "./harness/harness.ts";
 import { createSecurityScreenProxy, type SecurityScreener } from "./security/security-screener.ts";
 import { createMemoryTaskStore } from "./tasks/memory-task-store.ts";
 import { createPostgresTaskStore } from "./tasks/postgres-task-store.ts";
@@ -234,7 +234,6 @@ import {
 } from "./surface-cache/ack-emoji-pick-store.ts";
 import {
   auxiliaryModelFor,
-  auxiliaryModelForProvider,
   defaultModelForHarness,
   modelProviderAvailabilityFor,
   type HarnessId,
@@ -727,6 +726,15 @@ export function buildApp(
       ...(input.model ? { modelId: input.model } : {}),
     }),
   );
+  // ⚠ FAB-1: shared per-scope model resolver -- reading harness.models directly
+  // for a scope-specific decision (memory extraction/consolidation, ambient
+  // judging, Slack ack-emoji picking) silently reintroduces the leak fixed in
+  // 18d451d: harness.models is the ORG FALLBACK harness's own table, fixed
+  // regardless of what a given scope is actually pinned to. Every caller below
+  // that needs the right models for a scope must go through this, never
+  // `harness.models` directly.
+  const modelsForScope = async (scopeLabel: ScopeId): Promise<HarnessModelUtilities> =>
+    harness.modelsFor ? await harness.modelsFor(scopeLabel) : harness.models;
 
   const leaseTtlMs = config.leaseTtlMs;
   const maxAttempts = config.maxAttempts;
@@ -797,7 +805,7 @@ export function buildApp(
   });
   const admin = createAdminService(adminGrantStore);
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
-    harness: harness.models,
+    harness: modelsForScope,
     memory: baseMemory,
     workspace,
     ...(config.memoryConsolidateAfter !== undefined ? { consolidateAfter: config.memoryConsolidateAfter } : {}),
@@ -1077,7 +1085,14 @@ export function buildApp(
     reaperPoke: pokeReaper,
     surfaceCache,
     channelPolicy,
-    ...(harness.models.judge ? { ambientJudge: (s: string, pr: string) => harness.models.judge!(s, pr) } : {}),
+    // ⚠ FAB-1: resolved per the container's own scope via modelsForScope, never
+    // harness.models.judge -- the org fallback harness may support judge while
+    // a scope's own pin does not (or vice versa), so the capability check has
+    // to happen per call, not once at boot against the fallback alone.
+    ambientJudge: async (scopeLabel: ScopeId, s: string, pr: string) => {
+      const models = await modelsForScope(scopeLabel);
+      return models.judge?.(s, pr);
+    },
     ambientCursors: artifactMap<{ lastJudgedTs: string; lastJudgedAt?: number }>("ambient_cursors"),
     ambientJudgments,
     ackEmojiPicks,
@@ -1099,8 +1114,20 @@ export function buildApp(
     turnStream,
     tasks,
     ackPicks: ackEmojiPicks,
-    ackModelId: () => auxiliaryModelForProvider("anthropic"),
-    ...(harness.models.pickAckEmoji ? { pickAckEmoji: (t, c) => harness.models.pickAckEmoji!(t, c) } : {}),
+    // ⚠ FAB-1: was hardcoded to the anthropic provider's auxiliary model
+    // regardless of which harness the picking channel is actually pinned to
+    // -- now resolves the channel's own scope's runtime choice, matching
+    // effectiveModelName's pattern above.
+    ackModelId: async (scopeLabel: ScopeId) => {
+      const choice = await resolveRuntimeChoiceDurable(configStore, runtimeOrgScope, scopeLabel, fallback);
+      return choice.modelId;
+    },
+    // ⚠ FAB-1: resolved per the channel's own scope via modelsForScope, never
+    // harness.models.pickAckEmoji -- see ambientJudge's comment above for why.
+    pickAckEmoji: async (scopeLabel: ScopeId, t: string, c: readonly string[]) => {
+      const models = await modelsForScope(scopeLabel);
+      return models.pickAckEmoji?.(t, c);
+    },
   });
   runs.onTerminal((run) => {
     void runs

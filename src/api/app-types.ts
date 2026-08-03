@@ -361,7 +361,10 @@ export interface App {
   personMatcher(actorId: string): Promise<(id: string) => Promise<boolean>>;
   cronAdminUrl(cron: Cron): string | undefined;
   channelName(channelId: string): Promise<string | undefined>;
-  ambientJudge?(systemPrompt: string, prompt: string): Promise<string | undefined>;
+  // ⚠ FAB-1: scopeLabel is the container's own scope (scopeId("channel", container)),
+  // resolved fresh per call at the wiring layer via harness.modelsFor -- never a
+  // harness captured once at boot, which would ignore that scope's own runtime pin.
+  ambientJudge?(scopeLabel: ScopeId, systemPrompt: string, prompt: string): Promise<string | undefined>;
   directoryMembers(): Promise<DirectoryMember[]>;
   directoryChannels(): Promise<DirectoryChannel[]>;
   channelMember(channelId: string, principalId: string): Promise<boolean>;
@@ -484,7 +487,7 @@ export interface AppDeps {
   engaged?: EngagedRegistry;
   surfaceCache?: SurfaceCache;
   channelPolicy?: ChannelPolicyStore;
-  ambientJudge?: (systemPrompt: string, prompt: string) => Promise<string | undefined>;
+  ambientJudge?: (scopeLabel: ScopeId, systemPrompt: string, prompt: string) => Promise<string | undefined>;
   ambientCursors?: DurableMap<{ lastJudgedTs: string; lastJudgedAt?: number }>;
   ambientJudgments?: AmbientJudgmentStore;
   ackEmojiPicks?: AckEmojiPickStore;

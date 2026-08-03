@@ -1,4 +1,4 @@
-import type { HarnessModelUtilities } from "../../harness/harness.ts";
+import type { HarnessModelUtilities, ModelsForScope } from "../../harness/harness.ts";
 import { type MemoryService, ccCaptureToPersonal, isSystemActor } from "../memory-service.ts";
 import type { MemoryStrategy } from "../strategy.ts";
 import type { ScopeId } from "../../types.ts";
@@ -123,7 +123,9 @@ export function createBurstBuffer(
 }
 
 export function createPerTurnStrategy(deps: {
-  harness: HarnessModelUtilities;
+  // ⚠ FAB-1: resolved fresh per burst's own scopeId in flush() below, never
+  // read as a fixed table -- see ModelsForScope's doc.
+  harness: ModelsForScope;
   memory: MemoryService;
   maintain?: (scopeId: ScopeId) => Promise<void>;
   captureQuietMs?: number;
@@ -132,7 +134,8 @@ export function createPerTurnStrategy(deps: {
 }): MemoryStrategy {
   async function flush(burst: Burst): Promise<void> {
     const autonomous = isAutonomousBurst(burst);
-    const facts = await extractFacts(deps.harness, burst.turns, { autonomous });
+    const models = await deps.harness(burst.scopeId);
+    const facts = await extractFacts(models, burst.turns, { autonomous });
     if (!facts.length) return;
     const at = Date.now();
     await deps.memory.capture(burst.scopeId, facts, at);

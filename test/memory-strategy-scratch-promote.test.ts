@@ -7,14 +7,15 @@ import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryService, MEMORY_FILE } from "../src/memory/memory-service.ts";
 import { createMemoryStrategy, parseMemoryStrategyKind } from "../src/memory/strategy.ts";
 import { createScratchPromote, logPath, PROMOTION_PROMPT } from "../src/memory/strategies/scratch-promote.ts";
-import type { HarnessModelUtilities } from "../src/harness/harness.ts";
+import type { HarnessModelUtilities, ModelsForScope } from "../src/harness/harness.ts";
 
 const SCOPE = "user:U1";
 const DAY = 86_400_000;
 const TODAY = Date.UTC(2026, 5, 10, 12);
 
-function harnessOf(oneShot?: HarnessModelUtilities["oneShot"]): HarnessModelUtilities {
-  return oneShot ? { oneShot } : {};
+function harnessOf(oneShot?: HarnessModelUtilities["oneShot"]): ModelsForScope {
+  const models: HarnessModelUtilities = oneShot ? { oneShot } : {};
+  return async () => models;
 }
 
 function fresh(opts: { oneShot?: HarnessModelUtilities["oneShot"]; consolidateAfter?: number } = {}) {
@@ -172,4 +173,32 @@ test("strategy wiring: scratch-promote parses, wraps the store, and ships prompt
     base,
     "per-turn gets the consolidating store — captures by any path trigger the after-N check",
   );
+});
+
+// FAB-1: createScratchPromote's harness dep is a per-scope resolver, not a
+// fixed HarnessModelUtilities -- both flushBurst() (capture) and maintain()
+// (promotion) must resolve THEIR OWN scope's models on every call, never a
+// harness captured once at construction. Before this fix deps.harness was a
+// plain object and could not vary by scope at all -- this test would fail to
+// compile against that shape, and would catch a regression that resolves the
+// same models for every scope again.
+test("FAB-1: flushBurst() and maintain() each resolve their own scope, not a fixed harness", async () => {
+  const seenScopes: string[] = [];
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "msp-")));
+  const base = createMemoryService(workspace);
+  const harness: import("../src/harness/harness.ts").ModelsForScope = async (scopeId) => {
+    seenScopes.push(scopeId);
+    return { oneShot: () => Promise.resolve("- fact") };
+  };
+  const { strategy } = createScratchPromote({ harness, memory: base, workspace, consolidateAfter: 0 });
+
+  await withNow(TODAY, () => strategy.onTurnEnd!({ scopeId: "user:A", input: "hi", reply: "hello" }));
+  await withNow(TODAY, () => strategy.onTurnEnd!({ scopeId: "user:B", input: "hi", reply: "hello" }));
+  assert.ok(seenScopes.includes("user:A"), "flushBurst resolved user:A's own scope");
+  assert.ok(seenScopes.includes("user:B"), "flushBurst resolved user:B's own scope");
+
+  seenScopes.length = 0;
+  await workspace.write("user:C", logPath(TODAY), "# Scratch log\n\n- (2026-06-10) a fact\n");
+  await withNow(TODAY, () => strategy.maintain!("user:C"));
+  assert.deepEqual(seenScopes, ["user:C"], "maintain() resolved its own scope, not a leftover from flushBurst");
 });

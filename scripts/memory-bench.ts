@@ -55,7 +55,11 @@ for (const kind of kinds) {
   for (const conversation of conversations) {
     const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), `membench-${kind}-`)));
     const memory = createMemoryService(workspace);
-    const { strategy } = createMemoryStrategy(kind, { harness: harness.models, memory, workspace });
+    const { strategy } = createMemoryStrategy(kind, {
+      harness: async () => harness.models,
+      memory,
+      workspace,
+    });
     const scopeId = "user:bench";
     if (!strategy.onTurnEnd && !strategy.maintain) {
       console.log(`[${kind}] ${conversation.id}: no automatic capture — judging empty notebook`);

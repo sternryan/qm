@@ -72,7 +72,11 @@ export interface SlackCoreClient {
   pendingContextRequests(): Promise<SurfaceContextRequest[]>;
   onContextRequest(listener: (request: SurfaceContextRequest) => void): () => void;
   fulfillContextRequest(id: string, outcome: { result?: SurfaceContextResult; error?: string }): Promise<void>;
-  pickAckEmoji(text: string, candidates: readonly string[]): Promise<string | undefined>;
+  // ⚠ FAB-1: channel is resolved to its own scope (scopeId("channel", channel))
+  // inside createSlackCoreClient and passed to deps.pickAckEmoji fresh per call
+  // -- never a harness captured once at boot, which would ignore this
+  // channel's own runtime pin.
+  pickAckEmoji(text: string, candidates: readonly string[], channel: string): Promise<string | undefined>;
   recordAckPick(pick: AckPickInput): Promise<void>;
 }
 
@@ -99,9 +103,12 @@ export interface SlackCoreClientDeps {
   runs: RunStore;
   turnStream: TurnStream;
   tasks: TaskStore;
-  pickAckEmoji?(text: string, candidates: readonly string[]): Promise<string | undefined>;
+  // ⚠ FAB-1: scopeLabel is resolved fresh per call (scopeId("channel", channel));
+  // never a fixed harness captured once at boot -- see the SlackCoreClient
+  // interface's pickAckEmoji doc.
+  pickAckEmoji?(scopeLabel: ScopeId, text: string, candidates: readonly string[]): Promise<string | undefined>;
   ackPicks?: AckEmojiPickStore;
-  ackModelId?: () => string | undefined;
+  ackModelId?: (scopeLabel: ScopeId) => Promise<string | undefined>;
 }
 
 const RUN_FALLBACK_POLL_MS = 1_000;
@@ -303,13 +310,13 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       });
     },
 
-    pickAckEmoji(text, candidates) {
-      return deps.pickAckEmoji?.(text, candidates) ?? Promise.resolve(undefined);
+    pickAckEmoji(text, candidates, channel) {
+      return deps.pickAckEmoji?.(scopeId("channel", channel), text, candidates) ?? Promise.resolve(undefined);
     },
 
     async recordAckPick(pick) {
       if (!deps.ackPicks) return;
-      const ackModel = deps.ackModelId?.();
+      const ackModel = await deps.ackModelId?.(scopeId("channel", pick.channel));
       await deps.ackPicks
         .record({
           surface: "slack",

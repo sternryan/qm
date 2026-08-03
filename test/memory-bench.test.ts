@@ -39,7 +39,7 @@ test("parseBenchConversation rejects malformed input", () => {
 test("replayConversation runs every turn through the strategy and writes the notebook", async () => {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "membench-")));
   const memory = createMemoryService(workspace);
-  const { strategy } = createMemoryStrategy("per-turn", { harness: createMockHarness().models, memory, workspace });
+  const { strategy } = createMemoryStrategy("per-turn", { harness: async () => createMockHarness().models, memory, workspace });
   const conv: BenchConversation = {
     id: "t",
     description: "test",
@@ -57,7 +57,7 @@ test("replayConversation runs every turn through the strategy and writes the not
 test("replayConversation tolerates strategies with no automatic capture (agent-only)", async () => {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "membench-")));
   const memory = createMemoryService(workspace);
-  const { strategy } = createMemoryStrategy("agent-only", { harness: createMockHarness().models, memory, workspace });
+  const { strategy } = createMemoryStrategy("agent-only", { harness: async () => createMockHarness().models, memory, workspace });
   const conv: BenchConversation = { id: "t", description: "test", turns: [{ input: "hi", reply: "yo" }] };
   await replayConversation(strategy, "user:U1", conv);
   assert.equal(await workspace.read("user:U1", MEMORY_FILE), null);

@@ -66,7 +66,7 @@ export function createAckEmojiPicker(core: SlackCoreClient): AckEmojiPicker {
     if (!text.trim() || candidates.length === 0) return Promise.resolve(undefined);
     const startedAt = Date.now();
     return core
-      .pickAckEmoji(text, candidates)
+      .pickAckEmoji(text, candidates, ctx.channel)
       .catch(swallowAs("slack: ack-emoji pick", undefined))
       .then((picked) => {
         const icon = picked ? resolveEmojiIcon(picked) : undefined;

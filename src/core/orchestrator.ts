@@ -193,26 +193,20 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const pending = deps.approvals ?? createMemoryMap<PendingApprovalRecord>();
   const approvalGrants = deps.approvalGrants ?? createMemoryMap<CommandApprovalGrant>();
   const memoryPolicy = deps.memoryPolicy ?? DEFAULT_MEMORY_POLICY;
-  // Scope-aware model resolution (harness-router.ts's modelsFor) for the four
+  // Scope-aware model resolution (harness-router.ts's modelsFor) for the five
   // auxiliary call sites below that select a scope's own harness/model rather
   // than always the org fallback -- summarizeApproval, generateTitle,
-  // screenSecurity (via security-screen.ts), shouldRespond. Falls back to the
-  // plain, non-scope-aware "models" field for any Harness that is not a
-  // router (tests, or a future single-adapter caller).
-  //
-  // ⚠ memoryStrategy below is NOT covered: createPerTurnStrategy/
-  // createConsolidator/createScratchPromote capture a plain HarnessModelUtilities
-  // object ONCE, synchronously, at construction time (here), not per call --
-  // there is no per-turn hook to resolve it against a scope. Memory
-  // consolidation therefore still always summarizes through the org fallback
-  // harness for every scope, including personal:qm-scheduled. This is the same
-  // root cause, a structurally different fix (restructuring memory-strategy's
-  // dependency to accept a resolver), disclosed as a separate follow-up rather
-  // than forced into this change.
+  // screenSecurity (via security-screen.ts), shouldRespond, and the default
+  // memoryStrategy fallback just below. Falls back to the plain,
+  // non-scope-aware "models" field for any Harness that is not a router
+  // (tests, or a future single-adapter caller).
   const modelsForScope = async (scopeLabel: ScopeId): Promise<HarnessModelUtilities> =>
     deps.harness.modelsFor ? await deps.harness.modelsFor(scopeLabel) : deps.harness.models;
-  const memoryStrategy =
-    deps.memoryStrategy ?? createPerTurnStrategy({ harness: deps.harness.models, memory: deps.memory });
+  // ⚠ FAB-1: this default only applies when the caller (wiring.ts, or a test)
+  // does not supply its own memoryStrategy -- wiring.ts's own memoryStrategy
+  // is built the same way, via its own modelsForScope. Both must resolve per
+  // scope, never capture deps.harness.models once here at construction time.
+  const memoryStrategy = deps.memoryStrategy ?? createPerTurnStrategy({ harness: modelsForScope, memory: deps.memory });
   const blobTransfer = deps.blobTransfer ?? createMemoryBlobTransferStore();
 
   const pendingCaptures = new Map<ScopeId, Promise<void>>();
