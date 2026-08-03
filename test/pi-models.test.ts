@@ -175,3 +175,37 @@ test("context token budget is half of each model's real input room", () => {
     assert.ok(budget !== undefined && budget >= 60_000, `${m.id} budget ${budget} suspiciously small`);
   }
 });
+
+test("QM_PI_BASE_URL overrides baseUrl only for openai-provider models, and only when set", () => {
+  const prior = process.env.QM_PI_BASE_URL;
+  try {
+    delete process.env.QM_PI_BASE_URL;
+    const unsetOpenai = getRequiredModel("gpt-5.6-luna");
+    assert.equal(unsetOpenai.baseUrl, "https://api.openai.com/v1", "unset env must leave the builtin baseUrl untouched");
+    const anthropicBaseline = getRequiredModel("claude-opus-5").baseUrl;
+
+    process.env.QM_PI_BASE_URL = "http://127.0.0.1:8098/v1";
+    const overridden = getRequiredModel("gpt-5.6-luna");
+    assert.equal(overridden.baseUrl, "http://127.0.0.1:8098/v1", "set env must redirect an openai-provider model");
+    assert.equal(overridden.id, "gpt-5.6-luna", "override must not disturb the rest of the model");
+    assert.equal(overridden.cost.input, unsetOpenai.cost.input, "override must not touch pricing/other fields");
+
+    const anthropicWithOverrideSet = getRequiredModel("claude-opus-5");
+    assert.equal(
+      anthropicWithOverrideSet.baseUrl,
+      anthropicBaseline,
+      "the override must never leak into a non-openai provider's model",
+    );
+    assert.notEqual(anthropicWithOverrideSet.baseUrl, "http://127.0.0.1:8098/v1");
+
+    process.env.QM_PI_BASE_URL = "   ";
+    assert.equal(
+      getRequiredModel("gpt-5.6-luna").baseUrl,
+      "https://api.openai.com/v1",
+      "whitespace-only env must be treated as unset",
+    );
+  } finally {
+    if (prior === undefined) delete process.env.QM_PI_BASE_URL;
+    else process.env.QM_PI_BASE_URL = prior;
+  }
+});

@@ -125,7 +125,7 @@ function cloneModel(model: PiModel, id: string, name: string, overrides: Partial
   };
 }
 
-export function resolveModel(id: string): PiModel | undefined {
+function resolveModelUncached(id: string): PiModel | undefined {
   const entry = REGISTRY_BY_ID.get(id);
   if (entry?.clone) {
     const template = builtinModel(entry.clone.template);
@@ -143,6 +143,26 @@ export function resolveModel(id: string): PiModel | undefined {
       : undefined;
   }
   return builtinModel(id);
+}
+
+// FAB-1: the pi harness's openai-provider models otherwise always call the
+// real https://api.openai.com, regardless of any env var -- pi-ai's openai
+// provider hardcodes its baseUrl (node_modules/@earendil-works/pi-ai/dist/
+// providers/openai.js) and nothing upstream of it reads an env override.
+// OPENAI_BASE_URL exists in this repo but only feeds the *codex* harness's
+// subprocess env (codex-harness.ts) -- it is never consulted here. Without
+// this override, a scope pinned to the pi harness + an openai-provider
+// model cannot be routed through the loopback lane adapter at all.
+//
+// QM_PI_BASE_URL is read lazily (not cached at module load) so it behaves
+// correctly under tests that set/unset it per case. Unset -> untouched:
+// resolveModel returns the exact same object resolveModelUncached would,
+// byte-identical to pre-override behavior.
+export function resolveModel(id: string): PiModel | undefined {
+  const model = resolveModelUncached(id);
+  if (!model || model.provider !== "openai") return model;
+  const override = process.env.QM_PI_BASE_URL?.trim();
+  return override ? { ...model, baseUrl: override } : model;
 }
 
 export function auxiliaryModelForProvider(provider: string): string | undefined {
