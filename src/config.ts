@@ -69,6 +69,7 @@ export interface Config {
   backgroundJobTtlMs: number;
   backgroundJobTtlMaxMs: number;
   backgroundWorkEnabled: boolean;
+  cronDispatchEnabled: boolean;
   buildSha?: string;
   ecsTaskProtection: boolean;
   ecsAgentUri?: string;
@@ -765,6 +766,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         CONFIG_DEFAULTS.backgroundJobTtlMaxSec) * 1000,
     backgroundWorkEnabled:
       boolEnvStrict("BACKGROUND_WORK_ENABLED", env.BACKGROUND_WORK_ENABLED) ?? CONFIG_DEFAULTS.backgroundWorkEnabled,
+    // Gates ONLY the cron scheduler + its pg-boss consumer. Split out of
+    // BACKGROUND_WORK_ENABLED so an instance can run the worker pool (which the
+    // attended web UI needs -- it dispatches /v1/turns?async=1) while being
+    // structurally unable to fire crons. Defaults to backgroundWorkEnabled so
+    // existing single-instance deployments are unaffected.
+    cronDispatchEnabled:
+      boolEnvStrict("CRON_DISPATCH_ENABLED", env.CRON_DISPATCH_ENABLED) ??
+      (boolEnvStrict("BACKGROUND_WORK_ENABLED", env.BACKGROUND_WORK_ENABLED) ??
+        CONFIG_DEFAULTS.backgroundWorkEnabled),
     ...(env.GIT_SHA ? { buildSha: env.GIT_SHA } : {}),
     ecsTaskProtection: boolEnvStrict("ECS_TASK_PROTECTION", env.ECS_TASK_PROTECTION) ?? true,
     ...(env.ECS_AGENT_URI ? { ecsAgentUri: env.ECS_AGENT_URI } : {}),

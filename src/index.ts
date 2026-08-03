@@ -100,14 +100,15 @@ built.runtime.start();
 server.listen(config.port, () => {
   console.log(
     `[qm] listening on :${config.port} (org=${config.orgId}, store=${config.sessionStore}, ` +
-      `runStore=${config.runStore}, workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
+      `runStore=${config.runStore}, workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled}, ` +
+      `cronDispatch=${config.cronDispatchEnabled})`,
   );
 });
 
-if (config.backgroundWorkEnabled) {
+if (config.cronDispatchEnabled) {
   built.scheduler.start(1000);
 } else {
-  console.log("[qm] background work disabled; scheduler and runtime loops will not start");
+  console.log("[qm] cron dispatch disabled; this instance will not fire crons");
 }
 
 const slackRuntime = createSlackRuntimeReconciler({

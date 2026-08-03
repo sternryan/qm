@@ -409,3 +409,21 @@ test("baseModelProviders constrains the base model only when a provider is decla
     "with no declaration the shipped default stands, so upgrading never moves a deployment's model or its billing",
   );
 });
+
+test("CRON_DISPATCH_ENABLED splits cron firing from background work", () => {
+  // Default: inherits backgroundWorkEnabled, so existing deployments are unchanged.
+  assert.equal(loadConfig({}).cronDispatchEnabled, true);
+  assert.equal(loadConfig({ BACKGROUND_WORK_ENABLED: "false" }).cronDispatchEnabled, false);
+
+  // Explicit value wins over the inherited default, in both directions.
+  assert.equal(loadConfig({ CRON_DISPATCH_ENABLED: "false" }).cronDispatchEnabled, false);
+  assert.equal(loadConfig({ CRON_DISPATCH_ENABLED: "false" }).backgroundWorkEnabled, true);
+  assert.equal(
+    loadConfig({ BACKGROUND_WORK_ENABLED: "false", CRON_DISPATCH_ENABLED: "true" }).cronDispatchEnabled,
+    true,
+  );
+  assert.equal(
+    loadConfig({ BACKGROUND_WORK_ENABLED: "false", CRON_DISPATCH_ENABLED: "true" }).backgroundWorkEnabled,
+    false,
+  );
+});
