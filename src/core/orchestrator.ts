@@ -50,7 +50,7 @@ import {
   isValidCapabilityTimezone,
   type CapabilityClaims,
 } from "../auth/capability-token.ts";
-import type { GapWork, HarnessLlmRequestRecord } from "../harness/harness.ts";
+import type { GapWork, HarnessLlmRequestRecord, HarnessModelUtilities } from "../harness/harness.ts";
 import { forModelContext } from "../harness/context-compaction.ts";
 import {
   renderSecurityPolicyPrompt,
@@ -193,6 +193,24 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const pending = deps.approvals ?? createMemoryMap<PendingApprovalRecord>();
   const approvalGrants = deps.approvalGrants ?? createMemoryMap<CommandApprovalGrant>();
   const memoryPolicy = deps.memoryPolicy ?? DEFAULT_MEMORY_POLICY;
+  // Scope-aware model resolution (harness-router.ts's modelsFor) for the four
+  // auxiliary call sites below that select a scope's own harness/model rather
+  // than always the org fallback -- summarizeApproval, generateTitle,
+  // screenSecurity (via security-screen.ts), shouldRespond. Falls back to the
+  // plain, non-scope-aware "models" field for any Harness that is not a
+  // router (tests, or a future single-adapter caller).
+  //
+  // ⚠ memoryStrategy below is NOT covered: createPerTurnStrategy/
+  // createConsolidator/createScratchPromote capture a plain HarnessModelUtilities
+  // object ONCE, synchronously, at construction time (here), not per call --
+  // there is no per-turn hook to resolve it against a scope. Memory
+  // consolidation therefore still always summarizes through the org fallback
+  // harness for every scope, including personal:qm-scheduled. This is the same
+  // root cause, a structurally different fix (restructuring memory-strategy's
+  // dependency to accept a resolver), disclosed as a separate follow-up rather
+  // than forced into this change.
+  const modelsForScope = async (scopeLabel: ScopeId): Promise<HarnessModelUtilities> =>
+    deps.harness.modelsFor ? await deps.harness.modelsFor(scopeLabel) : deps.harness.models;
   const memoryStrategy =
     deps.memoryStrategy ?? createPerTurnStrategy({ harness: deps.harness.models, memory: deps.memory });
   const blobTransfer = deps.blobTransfer ?? createMemoryBlobTransferStore();
@@ -235,10 +253,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     reason: string,
     purpose?: string,
   ): Promise<string | undefined> {
-    if (!deps.harness.models.summarizeApproval) return undefined;
+    const models = await modelsForScope(scopeId);
+    if (!models.summarizeApproval) return undefined;
     try {
       const summary = await Promise.race([
-        deps.harness.models.summarizeApproval(command, reason, purpose),
+        models.summarizeApproval(command, reason, purpose),
         sleep(deps.approvalSummaryTimeoutMs ?? DEFAULT_APPROVAL_SUMMARY_TIMEOUT_MS).then(() => undefined),
       ]);
       return summary?.trim() || undefined;
@@ -261,9 +280,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     transcript: string,
     principalId?: string,
   ): Promise<string | undefined> {
-    if (!deps.harness.models.generateTitle || !transcript.trim()) return undefined;
+    const models = await modelsForScope(scopeId);
+    if (!models.generateTitle || !transcript.trim()) return undefined;
     try {
-      const title = await deps.harness.models.generateTitle(transcript);
+      const title = await models.generateTitle(transcript);
       if (title) {
         if (principalId) await deps.sessions.updateParticipantView(sessionId, principalId, { title });
         else await deps.sessions.updateTitle(sessionId, title);
@@ -1504,16 +1524,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (onboardingBlock) systemPrompt += `\n\n${onboardingBlock}`;
 
         const isRetry = (input.attempt ?? 1) > 1;
+        // Resolved for THIS session's own scope -- reading deps.harness.models
+        // directly here would silently use the org fallback harness's
+        // shouldRespond regardless of which harness scopeId is actually pinned
+        // to (the FAB-1 leak this modelsForScope() call closes).
+        const ambientModels = ambientTurn ? await modelsForScope(scopeId) : undefined;
         if (
           ambientTurn &&
-          deps.harness.models.shouldRespond &&
+          ambientModels?.shouldRespond &&
           !(isRetry && findTrailingPartialTurn(await deps.sessions.getEntries(session.id), input.text))
         ) {
           const detectHistory = filterHistory(
             (await deps.sessions.getEntries(session.id)).filter((e) => e.type !== "soul"),
           );
           const detectStart = Date.now();
-          const decision = await deps.harness.models.shouldRespond({
+          const decision = await ambientModels.shouldRespond({
             session,
             message: input.text,
             recentContext: input.detectContext ?? "",

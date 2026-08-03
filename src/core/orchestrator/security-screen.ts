@@ -4,7 +4,7 @@ import type { TurnOrigin } from "../turn-origin.ts";
 import { runShadowScreen, type SecurityScreenHook } from "../../security/security-screener.ts";
 import { UNSCREENED_REASON, type SecurityScreenVerdict } from "../../security/security-posture.ts";
 import { estimateCostUsd } from "../../ratelimit/budget.ts";
-import type { HarnessLlmRequestRecord } from "../../harness/harness.ts";
+import type { HarnessLlmRequestRecord, HarnessModelUtilities } from "../../harness/harness.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { sleep } from "../../util/async.ts";
 import type { OrchestratorDeps } from "./types.ts";
@@ -30,9 +30,17 @@ export type SecurityClassifier = (
   },
 ) => Promise<SecurityScreenVerdict | undefined>;
 
+// ⚠ FAB-1: must be resolved fresh per scopeLabel, never deps.harness.models
+// directly -- that field is the org fallback harness's own table, fixed
+// regardless of what harness/model scopeLabel is actually pinned to.
+async function modelsForScope(deps: OrchestratorDeps, scopeLabel: ScopeId): Promise<HarnessModelUtilities> {
+  return deps.harness.modelsFor ? await deps.harness.modelsFor(scopeLabel) : deps.harness.models;
+}
+
 export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassifier {
   return async function classifySecurityData(payload, actorId, scopeLabel, recordLlmRequest, context = {}) {
-    if (!deps.securityScreener && !deps.harness.models.screenSecurity) return undefined;
+    const models = await modelsForScope(deps, scopeLabel);
+    if (!deps.securityScreener && !models.screenSecurity) return undefined;
     const timeoutMs = deps.securityScreenTimeoutMs ?? DEFAULT_SECURITY_SCREEN_TIMEOUT_MS;
     const attempt = async (): Promise<SecurityScreenVerdict | undefined> => {
       const abort = new AbortController();
@@ -40,7 +48,7 @@ export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassi
       let proxySettled = false;
       const requestId = context.requestId ?? randomUUID();
       const modelScreen = () =>
-        deps.harness.models.screenSecurity?.({
+        models.screenSecurity?.({
           payload,
           signal: abort.signal,
           recordModelCall: (rec) => {

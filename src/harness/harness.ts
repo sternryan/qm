@@ -167,7 +167,20 @@ export interface HarnessToolPresentation {
 export interface Harness {
   profile: HarnessAdapterProfile;
   turns: HarnessTurnController;
+  // Fixed models for a harness that is not itself a multiplexer (every concrete
+  // adapter -- claude/pi/codex/opencode/mock -- has exactly one, correct, answer
+  // here). A ROUTER over several adapters (see harness-router.ts) must resolve
+  // this per scope instead, via modelsFor -- "models" alone cannot vary by
+  // scope, which is exactly the bug this comment exists to prevent regressing.
   models: HarnessModelUtilities;
+  // Optional: scope-aware resolution of models, for a Harness that multiplexes
+  // several underlying adapters (currently only the harness-router). Callers
+  // that need the RIGHT model utilities for a specific scope (title generation,
+  // security screening, judge, shouldRespond, compaction, approval summaries)
+  // must call this when present and fall back to the plain "models" field
+  // only when it is absent -- reading "models" directly for one of those
+  // purposes silently reintroduces the FAB-1 leak this method exists to close.
+  modelsFor?(scopeLabel: ScopeId): HarnessModelUtilities | Promise<HarnessModelUtilities>;
   tools: HarnessToolPresentation;
 }
 

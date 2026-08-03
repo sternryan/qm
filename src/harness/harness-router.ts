@@ -81,15 +81,30 @@ export async function resolveRuntimeChoiceDurable(
   return resolveRuntimeChoice(view, orgScopeId, scope, fallback, requested);
 }
 
+// Only these three fields of HarnessTurnInput are ever read by a resolve()
+// callback (confirmed against wiring.ts's own implementation) -- narrowed so
+// modelsFor() below can call resolve() with just a scope, no fabricated turn.
+export type HarnessRouteInput = Pick<HarnessTurnInput, "scopeLabel" | "harness" | "model">;
+
 export function createHarnessRouter(
   adapters: ReadonlyMap<HarnessId, Harness>,
   utility: Harness,
-  resolve: (input: HarnessTurnInput) => RuntimeChoice | Promise<RuntimeChoice>,
+  resolve: (input: HarnessRouteInput) => RuntimeChoice | Promise<RuntimeChoice>,
 ): Harness {
   const lastHarness = new Map<string, HarnessId>();
   return {
     profile: utility.profile,
+    // ⚠ FAB-1: this is the fallback harness's own models table, used only when
+    // a caller does not go through modelsFor(). Never read this directly for a
+    // scope-specific decision (title/screen/judge/shouldRespond/compaction/
+    // approval-summary) -- it does not vary by scope and previously caused
+    // every scope's auxiliary calls to silently run on the org fallback
+    // harness regardless of that scope's own runtime pin.
     models: utility.models,
+    async modelsFor(scopeLabel) {
+      const choice = await resolve({ scopeLabel });
+      return adapters.get(choice.harnessId)?.models ?? utility.models;
+    },
     tools: utility.tools,
     turns: {
       async runTurn(input) {

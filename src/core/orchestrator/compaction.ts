@@ -1,4 +1,5 @@
 import type { ScopeId, Session, SessionEntry } from "../../types.ts";
+import type { HarnessModelUtilities } from "../../harness/harness.ts";
 import { parseScopeId } from "../../types.ts";
 import type { Lease } from "../../sessions/session-store.ts";
 import {
@@ -51,8 +52,18 @@ export interface CompactionContext {
 
 export function createCompaction(deps: OrchestratorDeps): CompactionContext {
   const maxContextEntries = deps.maxContextEntries ?? MAX_CONTEXT_ENTRIES;
-  const tokenBudgetFor = (scopeLabel?: string, model?: string): number =>
-    deps.maxContextTokens ?? deps.harness.models.contextTokenBudget?.(scopeLabel, model) ?? MAX_CONTEXT_TOKENS;
+  // ⚠ FAB-1: resolved per scope, never deps.harness.models directly -- see
+  // harness-router.ts's modelsFor comment for why that field is fixed to the
+  // org fallback harness regardless of scopeLabel's own pin.
+  const modelsForScope = async (scopeLabel?: string): Promise<HarnessModelUtilities> => {
+    if (!scopeLabel) return deps.harness.models;
+    return deps.harness.modelsFor ? await deps.harness.modelsFor(scopeLabel as ScopeId) : deps.harness.models;
+  };
+  const tokenBudgetFor = async (scopeLabel?: string, model?: string): Promise<number> => {
+    if (deps.maxContextTokens !== undefined) return deps.maxContextTokens;
+    const models = await modelsForScope(scopeLabel);
+    return models.contextTokenBudget?.(scopeLabel, model) ?? MAX_CONTEXT_TOKENS;
+  };
 
   const boundRecent = (entries: SessionEntry[], maxContextTokens: number): SessionEntry[] => {
     const summary = entries.find((e) => contextSummaryPayload(e));
@@ -84,8 +95,9 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     model?: string;
   }): Promise<Summarized | null> {
     if (isManagedGroupScope(input.scopeId)) return null;
-    if (!deps.harness.models.compactHistory) return null;
-    const maxContextTokens = tokenBudgetFor(input.scopeId, input.model);
+    const models = await modelsForScope(input.scopeId);
+    if (!models.compactHistory) return null;
+    const maxContextTokens = await tokenBudgetFor(input.scopeId, input.model);
     const reuseBudget = {
       entries: keepRecentEntries + 1,
       tokens: Math.floor(maxContextTokens * keepRecentTokenFraction),
@@ -103,7 +115,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     const summaryLabel = compactedScopeLabel(plan.toSummarize, input.scopeId, input.orgScopeId);
     if (!summaryLabel) return null;
 
-    const text = await deps.harness.models.compactHistory({
+    const text = await models.compactHistory({
       session: input.session,
       history: plan.toSummarize,
       recordModelCall: (rec) => {
@@ -191,7 +203,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     actorId: string;
     model?: string;
   }): Promise<{ history: SessionEntry[]; compactionMirrorFailed: boolean }> {
-    const maxContextTokens = tokenBudgetFor(input.scopeId, input.model);
+    const maxContextTokens = await tokenBudgetFor(input.scopeId, input.model);
     if (!overBudgetFraction(input.visibleHistory, maxContextEntries, maxContextTokens, COMPACT_HARD_FRACTION)) {
       return { history: input.visibleHistory, compactionMirrorFailed: false };
     }
@@ -232,7 +244,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
       try {
         const session = await deps.sessions.get(input.sessionId);
         if (!session) return;
-        const maxContextTokens = tokenBudgetFor(input.scopeId);
+        const maxContextTokens = await tokenBudgetFor(input.scopeId);
         const entries = await deps.sessions.getEntries(input.sessionId);
         const history = forModelContext(entries, { includeSecurityTainted: input.includeSecurityTainted });
         if (!overBudgetFraction(history, maxContextEntries, maxContextTokens, COMPACT_SOFT_FRACTION)) return;
