@@ -62,7 +62,14 @@ const server = createServer(built.app, {
   ...(config.awsDeploy.gateSecret ? { deployGateSecret: config.awsDeploy.gateSecret } : {}),
   ...(config.deployAppsSessionSecret ? { deployAppsSessionSecret: config.deployAppsSessionSecret } : {}),
   ...(config.deployAppsLoginUrl ? { deployAppsLoginUrl: config.deployAppsLoginUrl } : {}),
-  scheduler: built.scheduler,
+  // An instance that does not dispatch crons must also refuse to fire one on
+  // demand: POST /v1/crons/:id/run calls scheduler.runNow() IN THIS PROCESS,
+  // which on the attended (uncontained) instance would run scheduled work with
+  // full egress and silently defeat the FAB-1 containment split. Both the
+  // source and capability paths already refuse a missing scheduler with
+  // "the scheduler isn't running here" -- so withhold it rather than add a
+  // second, parallel check that could drift.
+  ...(config.cronDispatchEnabled ? { scheduler: built.scheduler } : {}),
   identity: built.identity,
   ...(built.keychain ? { keychain: built.keychain } : {}),
   serviceCreds: built.serviceCreds,

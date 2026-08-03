@@ -1213,7 +1213,10 @@ export function buildApp(
       : {}),
   });
   cronChanged.notify = (id) => scheduler.notifyChanged(id);
-  orchestratorDeps.control = createControlService(app, scheduler);
+  // Same reason as the API deps in index.ts: the tool-primitive path
+  // (tools/primitives.ts -> control.runCron) must not be able to fire a cron
+  // in a process that does not dispatch crons.
+  orchestratorDeps.control = createControlService(app, config.cronDispatchEnabled ? scheduler : undefined);
   const monitorPoller: MonitorPoller | null =
     processes && supportsProcessSessions(sandbox)
       ? createMonitorPoller({
