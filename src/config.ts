@@ -250,6 +250,7 @@ interface LocalSandboxEnv {
   memoryMb?: number;
   defaultTimeoutSec?: number;
   egressEnforcement?: EgressEnforcement;
+  alwaysKeepWarm?: boolean;
 }
 
 function localSandboxEnv(env: NodeJS.ProcessEnv): LocalSandboxEnv {
@@ -268,6 +269,9 @@ function localSandboxEnv(env: NodeJS.ProcessEnv): LocalSandboxEnv {
     ...(env.LOCAL_SANDBOX_EGRESS_ENFORCEMENT?.trim() === "ip_port" ||
     env.LOCAL_SANDBOX_EGRESS_ENFORCEMENT?.trim() === "domain"
       ? { egressEnforcement: env.LOCAL_SANDBOX_EGRESS_ENFORCEMENT.trim() as EgressEnforcement }
+      : {}),
+    ...(boolEnvStrict("LOCAL_SANDBOX_KEEP_WARM", env.LOCAL_SANDBOX_KEEP_WARM) !== undefined
+      ? { alwaysKeepWarm: boolEnvStrict("LOCAL_SANDBOX_KEEP_WARM", env.LOCAL_SANDBOX_KEEP_WARM) }
       : {}),
   };
 }

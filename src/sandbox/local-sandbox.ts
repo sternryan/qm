@@ -50,6 +50,7 @@ export interface LocalSandboxOptions {
   dockerExec?: DockerExec;
   fetchImpl?: typeof fetch;
   egressEnforcement?: EgressEnforcement;
+  alwaysKeepWarm?: boolean;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
@@ -466,6 +467,8 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
         }
 
         if (tdOpts?.keepWarm) return;
+
+        if (opts.alwaysKeepWarm) return;
 
         if (tdOpts?.destroy) {
           await dexec(["rm", "-f", handle.id]).catch(swallowAs("local-sandbox: destroy rm", undefined));
