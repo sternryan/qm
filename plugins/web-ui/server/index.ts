@@ -29,6 +29,7 @@ import {
 } from "../../chassis/src/env.ts";
 
 const PORT = portFromEnv(8096);
+const BIND_HOST = process.env.WEB_UI_BIND_HOST?.trim() || undefined;
 const PUBLIC_URL = (process.env.WEB_UI_PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
 const WEB_UI_DEV = process.env.WEB_UI_DEV === "1";
 const ALLOW_UNSIGNED_TEST_IDENTITY =
@@ -1928,9 +1929,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   createVite(server)
     .then((v) => {
       vite = v;
-      server.listen(PORT, () => {
+      server.listen(PORT, BIND_HOST, () => {
         console.log(
-          `[web-ui] surface on http://localhost:${PORT} → core ${CORE} (org ${ORG})${WEB_UI_DEV ? " [vite hmr]" : ""}`,
+          `[web-ui] surface on http://${BIND_HOST ?? "0.0.0.0"}:${PORT} → core ${CORE} (org ${ORG})${WEB_UI_DEV ? " [vite hmr]" : ""}`,
         );
         if (!WEB_UI_DEV && !existsSync(join(DIST, "index.html")))
           console.warn("[web-ui] dist-web/ not built — run `npm run build`");
