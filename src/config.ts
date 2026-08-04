@@ -26,6 +26,7 @@ export interface Config {
   allowUnauthenticatedCore: boolean;
   port: number;
   bindHost?: string;
+  corpusReaders?: Record<string, string>;
   dataDir: string;
   orgId: string;
   sessionStore: "memory" | "postgres";
@@ -565,6 +566,23 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
   return declared;
 }
 
+function corpusReadersFromEnv(env: NodeJS.ProcessEnv): Record<string, string> | undefined {
+  const raw = env.CORPUS_READERS?.trim();
+  if (!raw) return undefined;
+  const map: Record<string, string> = {};
+  for (const entry of raw.split(",")) {
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) throw new Error(`CORPUS_READERS entry is not scope=url: ${trimmed}`);
+    const scope = trimmed.slice(0, eq).trim();
+    const url = trimmed.slice(eq + 1).trim().replace(/\/$/, "");
+    if (!scope || !url) throw new Error(`CORPUS_READERS entry is not scope=url: ${trimmed}`);
+    map[scope] = url;
+  }
+  return Object.keys(map).length ? map : undefined;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const missingSecrets = validateCoreSecretEnv(env);
   if (missingSecrets.length) {
@@ -701,6 +719,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     allowUnauthenticatedCore: boolEnvStrict("ALLOW_UNAUTHENTICATED_CORE", env.ALLOW_UNAUTHENTICATED_CORE) ?? false,
     port: numEnvStrict("PORT", env.PORT) ?? CONFIG_DEFAULTS.port,
     ...(env.BIND_HOST?.trim() ? { bindHost: env.BIND_HOST.trim() } : {}),
+    ...(corpusReadersFromEnv(env) ? { corpusReaders: corpusReadersFromEnv(env) } : {}),
     dataDir,
     orgId: env.ORG_ID ?? DEFAULT_ORG_ID,
     sessionStore: env.SESSION_STORE === "postgres" ? "postgres" : "memory",

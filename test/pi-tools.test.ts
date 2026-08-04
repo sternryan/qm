@@ -1692,3 +1692,79 @@ test("pauseStampAfterToolCall stamps terminate on sibling results once the turn 
   const withPrior = pauseStampAfterToolCall(ref, () => ({ terminate: false }));
   assert.deepEqual(await withPrior({}, undefined), { terminate: true });
 });
+
+// ToolDefinition.execute is declared with more parameters than the runtime call
+// site uses; src/harness/pi-tools.ts casts it the same way in withToolApprovalGate.
+type ToolResult = { content: Array<{ text?: string }> };
+const callTool = (t: { execute: unknown }, callId: string, params: unknown): Promise<ToolResult> =>
+  (t.execute as (callId: string, params: unknown) => Promise<ToolResult>)(callId, params);
+
+test("brain: absent unless the deployment configures a corpus reader", () => {
+  const ref: ToolContextRef = { current: fakeToolContext() };
+  assert.equal(
+    createPiTools(ref, {}).some((t) => t.name === "brain"),
+    false,
+  );
+  assert.equal(
+    createPiTools(ref, { corpusReaders: { "personal:U1": "http://127.0.0.1:8099" } }).some((t) => t.name === "brain"),
+    true,
+  );
+});
+
+test("brain: a scope with no mapping is refused, never silently served another scope's corpus", async () => {
+  // The whole isolation story rests on this: a fallback here would hand one
+  // person's corpus to another. Assert the refusal, not just the absence.
+  const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: "personal:unmapped" };
+  const brain = createPiTools(ref, { corpusReaders: { "personal:U1": "http://127.0.0.1:8099" } }).find(
+    (t) => t.name === "brain",
+  );
+  assert.ok(brain);
+  const res = await callTool(brain, "c1", { action: "search", query: "anything" });
+  assert.match(res.content[0]?.text ?? "", /no knowledge base is configured/);
+});
+
+test("brain: routes to the endpoint mapped for THIS scope", async () => {
+  const seen: Array<{ url: string; body: string }> = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    seen.push({ url: String(url), body: String(init?.body ?? "") });
+    return new Response(JSON.stringify({ ok: true, text: "a page" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof globalThis.fetch;
+  try {
+    const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: "personal:U2" };
+    const brain = createPiTools(ref, {
+      corpusReaders: { "personal:U1": "http://127.0.0.1:8099", "personal:U2": "http://127.0.0.1:8100" },
+    }).find((t) => t.name === "brain");
+    assert.ok(brain);
+    await callTool(brain, "c2", { action: "get_page", slug: "meetings/x" });
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0]?.url, "http://127.0.0.1:8100/read");
+    assert.match(seen[0]?.body ?? "", /"tool":"get_page"/);
+    assert.match(seen[0]?.body ?? "", /"slug":"meetings\/x"/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("brain: the reader's own ok:false refusal surfaces as an error, not an empty result", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ ok: false, text: '{"error":"page_not_found"}' }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as typeof globalThis.fetch;
+  try {
+    const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: "personal:U1" };
+    const brain = createPiTools(ref, { corpusReaders: { "personal:U1": "http://127.0.0.1:8099" } }).find(
+      (t) => t.name === "brain",
+    );
+    assert.ok(brain);
+    const res = await callTool(brain, "c3", { action: "get_page", slug: "nope" });
+    assert.match(res.content[0]?.text ?? "", /page_not_found/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

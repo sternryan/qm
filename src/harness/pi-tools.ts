@@ -241,6 +241,7 @@ export interface PiToolsOptions {
   readOnly?: boolean;
   surfaceTools?: boolean;
   surfaceName?: string;
+  corpusReaders?: Record<string, string>;
 }
 
 export type CoreToolOptions = Omit<PiToolsOptions, "readOnly" | "surfaceTools" | "surfaceName">;
@@ -254,11 +255,14 @@ export function coreToolOptions(config: Config): CoreToolOptions {
     execTimeoutMs: config.execTimeoutDefaultMs,
     execTimeoutCeilingMs: config.execTimeoutMaxMs,
     backgroundJobTtlMs: config.backgroundJobTtlMs,
+    ...(config.corpusReaders ? { corpusReaders: config.corpusReaders } : {}),
     backgroundJobTtlMaxMs: config.backgroundJobTtlMaxMs,
   };
 }
 
-const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "finish_silently"]);
+const CORPUS_READ_TIMEOUT_MS = 30_000;
+
+const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "brain", "finish_silently"]);
 
 export function pauseStampAfterToolCall(
   ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested">,
@@ -280,6 +284,7 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
   const reachExec = !!opts?.reachExec;
   const controlTools = !!opts?.controlTools;
   const surfaceTools = !!opts?.surfaceTools;
+  const corpusReaders = opts?.corpusReaders;
   const execTimeoutSec = Math.round((opts?.execTimeoutMs ?? CONFIG_DEFAULTS.execTimeoutDefaultSec * 1000) / 1000);
   const execCeilingSec = Math.round((opts?.execTimeoutCeilingMs ?? CONFIG_DEFAULTS.execTimeoutMaxSec * 1000) / 1000);
   const bgTtlSec = Math.round((opts?.backgroundJobTtlMs ?? CONFIG_DEFAULTS.backgroundJobTtlSec * 1000) / 1000);
@@ -2394,6 +2399,103 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
     },
   });
 
+  const brain = defineTool({
+    name: "brain",
+    label: "brain",
+    description:
+      "Read the knowledge base this conversation is entitled to — a curated corpus of pages, far " +
+      "larger than anything that fits in context. Use it before answering from guesswork about the " +
+      "person or org you work for: their meetings, decisions, projects, people and history live " +
+      "here. Read-only by construction; there is no way to write through this tool. " +
+      "Which corpus you reach is decided by the deployment, not by anything you pass — a " +
+      "conversation can only ever read its OWN, and a conversation with none configured has no " +
+      "access at all. " +
+      'action="search" and action="query" find pages by words; action="recall" is the ' +
+      "broadest recall over the same corpus. " +
+      'action="list_pages" enumerates pages; action="get_page" returns one whole page by `slug`; ' +
+      'action="get_chunks" returns its indexed pieces; action="get_backlinks" the pages linking ' +
+      'to it; action="get_timeline" its dated entries; action="get_tags" its tags. ' +
+      "Prefer a search first, then get_page on the slug it returns — slugs are exact, not guessable.",
+    parameters: Type.Object({
+      action: Type.Union(
+        [
+          Type.Literal("search"),
+          Type.Literal("query"),
+          Type.Literal("recall"),
+          Type.Literal("list_pages"),
+          Type.Literal("get_page"),
+          Type.Literal("get_chunks"),
+          Type.Literal("get_backlinks"),
+          Type.Literal("get_timeline"),
+          Type.Literal("get_tags"),
+        ],
+        { description: "which read to perform against the corpus." },
+      ),
+      query: Type.Optional(Type.String({ description: "search/query/recall: the words to look for." })),
+      slug: Type.Optional(
+        Type.String({ description: "get_page/get_chunks/get_backlinks/get_timeline/get_tags: the exact page slug." }),
+      ),
+      limit: Type.Optional(Type.Integer({ description: "max results to return." })),
+    }),
+    async execute(callId, params) {
+      const endpoint = corpusReaders?.[ref.scopeLabel ?? ""];
+      await recordCall(callId, {
+        tool: "brain",
+        action: params.action,
+        ...(params.query !== undefined ? { query: params.query } : {}),
+        ...(params.slug !== undefined ? { slug: params.slug } : {}),
+      });
+      if (!endpoint)
+        return recordResult(
+          callId,
+          { tool: "brain", action: params.action, unavailable: true },
+          text("[no knowledge base is configured for this conversation]"),
+          true,
+        );
+      const args: Record<string, unknown> = {
+        ...(params.query !== undefined ? { query: params.query } : {}),
+        ...(params.slug !== undefined ? { slug: params.slug } : {}),
+        ...(params.limit !== undefined ? { limit: params.limit } : {}),
+      };
+      try {
+        const res = await fetch(`${endpoint}/read`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ tool: params.action, arguments: args }),
+          signal: AbortSignal.timeout(CORPUS_READ_TIMEOUT_MS),
+        });
+        if (!res.ok)
+          return recordResult(
+            callId,
+            { tool: "brain", action: params.action, status: res.status },
+            text(`[brain read failed] the knowledge base returned HTTP ${res.status}`),
+            true,
+          );
+        const body = (await res.json()) as { ok?: boolean; text?: string };
+        const out = typeof body.text === "string" ? body.text : "";
+        // The reader reports its own refusals (unknown tool, not found) as ok:false
+        // with the detail in `text`. Surfacing that verbatim as an error keeps a
+        // refusal distinguishable from an empty result -- absence and failure must
+        // not read the same.
+        if (body.ok === false)
+          return recordResult(
+            callId,
+            { tool: "brain", action: params.action, ok: false },
+            text(out || "[brain read refused, no detail given]"),
+            true,
+          );
+        return recordResult(
+          callId,
+          { tool: "brain", action: params.action, ok: true, chars: out.length },
+          text(out || "[no results]"),
+        );
+      } catch (e) {
+        const msg = errMessage(e);
+        return recordResult(callId, { tool: "brain", action: params.action, error: msg }, text(`[brain read failed] ${msg}`), true);
+      }
+    },
+  });
+
   const tools = [
     execute,
     read,
@@ -2401,6 +2503,7 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
     publish,
     memory,
     history,
+    ...(corpusReaders ? [brain] : []),
     background,
     ...(controlTools ? [cron, share] : []),
     ...(controlTools || surfaceTools ? [guidance] : []),

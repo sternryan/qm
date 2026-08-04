@@ -427,3 +427,25 @@ test("CRON_DISPATCH_ENABLED splits cron firing from background work", () => {
     false,
   );
 });
+
+test("CORPUS_READERS parses scope=url pairs, and a scope id containing : and @ survives", () => {
+  const config = loadConfig({
+    ...productionEnv,
+    CORPUS_READERS: "personal:sternryan@github=http://127.0.0.1:8099, personal:NyrW@github=http://127.0.0.1:8100/",
+  });
+  assert.deepEqual(config.corpusReaders, {
+    "personal:sternryan@github": "http://127.0.0.1:8099",
+    "personal:NyrW@github": "http://127.0.0.1:8100",
+  });
+});
+
+test("CORPUS_READERS unset leaves corpusReaders undefined, so no scope gets a brain by default", () => {
+  assert.equal(loadConfig({ ...productionEnv }).corpusReaders, undefined);
+});
+
+test("CORPUS_READERS rejects a malformed entry rather than silently dropping it", () => {
+  assert.throws(
+    () => loadConfig({ ...productionEnv, CORPUS_READERS: "personal:a=http://x,garbage" }),
+    /not scope=url/,
+  );
+});
