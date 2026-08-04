@@ -154,15 +154,24 @@ function resolveModelUncached(id: string): PiModel | undefined {
 // this override, a scope pinned to the pi harness + an openai-provider
 // model cannot be routed through the loopback lane adapter at all.
 //
-// QM_PI_BASE_URL is read lazily (not cached at module load) so it behaves
-// correctly under tests that set/unset it per case. Unset -> untouched:
-// resolveModel returns the exact same object resolveModelUncached would,
-// byte-identical to pre-override behavior.
+// The override arrives from the config boundary (QM_PI_BASE_URL -> loadConfig ->
+// buildApp -> setPiBaseUrlOverride) rather than being read from process.env here.
+// resolveModel is a pure lookup called from ~20 sites across the tree, so passing
+// config into all of them would be a wide refactor for one string; injecting it
+// once keeps env parsing at the boundary where the lint rule wants it. Unset ->
+// untouched: resolveModel returns the exact same object resolveModelUncached
+// would, byte-identical to pre-override behavior.
+let piBaseUrlOverride: string | undefined;
+
+export function setPiBaseUrlOverride(baseUrl: string | undefined): void {
+  const trimmed = baseUrl?.trim();
+  piBaseUrlOverride = trimmed ? trimmed : undefined;
+}
+
 export function resolveModel(id: string): PiModel | undefined {
   const model = resolveModelUncached(id);
   if (!model || model.provider !== "openai") return model;
-  const override = process.env.QM_PI_BASE_URL?.trim();
-  return override ? { ...model, baseUrl: override } : model;
+  return piBaseUrlOverride ? { ...model, baseUrl: piBaseUrlOverride } : model;
 }
 
 export function auxiliaryModelForProvider(provider: string): string | undefined {

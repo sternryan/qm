@@ -236,6 +236,7 @@ import {
   auxiliaryModelFor,
   defaultModelForHarness,
   modelProviderAvailabilityFor,
+  setPiBaseUrlOverride,
   type HarnessId,
 } from "./model/pi-models.ts";
 import { createAdminService, bootAdminGrantSeed, type AdminService } from "./admin/admin-service.ts";
@@ -371,6 +372,9 @@ export function buildApp(
   if (config.databaseUrl && !config.connectorSecretKey) {
     throw new Error("CONNECTOR_SECRET_KEY is required with durable storage");
   }
+  // Hand the parsed override to pi-models before anything resolves a model. Both
+  // entry points (index.ts, runs/worker-main.ts) reach the runtime through here.
+  setPiBaseUrlOverride(config.piBaseUrl);
   const reusedConnectorKey = [
     ["CORE_SIGNING_SECRET", config.signingSecret],
     ["CAPABILITY_SECRET", config.capabilitySecret],

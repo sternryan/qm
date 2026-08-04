@@ -84,6 +84,9 @@ export interface Config {
   secretsBackend: "env" | "aws";
   secretsPrefix: string;
   apiBaseUrl?: string;
+  // Redirects openai-provider models to a different endpoint (the loopback lane adapter).
+  // Consumed by pi-models via setPiBaseUrlOverride, injected once in buildApp.
+  piBaseUrl?: string;
   publicUrl?: string;
   publicWebUrl?: string;
   flyAppName?: string;
@@ -794,6 +797,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     secretsBackend: secretsBackendEnvStrict(env.SECRETS_BACKEND, env.SECRETS_PREFIX ?? ""),
     secretsPrefix: env.SECRETS_PREFIX ?? "",
     ...(publicApiUrl ? { apiBaseUrl: publicApiUrl } : {}),
+    ...(env.QM_PI_BASE_URL?.trim() ? { piBaseUrl: env.QM_PI_BASE_URL.trim() } : {}),
     ...(publicUrl ? { publicUrl } : {}),
     ...(env.PUBLIC_WEB_URL ? { publicWebUrl: env.PUBLIC_WEB_URL } : {}),
     ...(env.FLY_APP_NAME ? { flyAppName: env.FLY_APP_NAME } : {}),

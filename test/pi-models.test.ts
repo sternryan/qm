@@ -9,6 +9,7 @@ import {
   modelSupportedByHarness,
   onlyProvider,
   resolveModel,
+  setPiBaseUrlOverride,
   getRequiredModel,
   MODEL_PROVIDERS,
   SELECTABLE_BASE_MODELS,
@@ -176,17 +177,20 @@ test("context token budget is half of each model's real input room", () => {
   }
 });
 
-test("QM_PI_BASE_URL overrides baseUrl only for openai-provider models, and only when set", () => {
-  const prior = process.env.QM_PI_BASE_URL;
+test("the pi baseUrl override applies only to openai-provider models, and only when set", () => {
   try {
-    delete process.env.QM_PI_BASE_URL;
+    setPiBaseUrlOverride(undefined);
     const unsetOpenai = getRequiredModel("gpt-5.6-luna");
-    assert.equal(unsetOpenai.baseUrl, "https://api.openai.com/v1", "unset env must leave the builtin baseUrl untouched");
+    assert.equal(
+      unsetOpenai.baseUrl,
+      "https://api.openai.com/v1",
+      "no override must leave the builtin baseUrl untouched",
+    );
     const anthropicBaseline = getRequiredModel("claude-opus-5").baseUrl;
 
-    process.env.QM_PI_BASE_URL = "http://127.0.0.1:8098/v1";
+    setPiBaseUrlOverride("http://127.0.0.1:8098/v1");
     const overridden = getRequiredModel("gpt-5.6-luna");
-    assert.equal(overridden.baseUrl, "http://127.0.0.1:8098/v1", "set env must redirect an openai-provider model");
+    assert.equal(overridden.baseUrl, "http://127.0.0.1:8098/v1", "an override must redirect an openai-provider model");
     assert.equal(overridden.id, "gpt-5.6-luna", "override must not disturb the rest of the model");
     assert.equal(overridden.cost.input, unsetOpenai.cost.input, "override must not touch pricing/other fields");
 
@@ -198,14 +202,31 @@ test("QM_PI_BASE_URL overrides baseUrl only for openai-provider models, and only
     );
     assert.notEqual(anthropicWithOverrideSet.baseUrl, "http://127.0.0.1:8098/v1");
 
-    process.env.QM_PI_BASE_URL = "   ";
+    setPiBaseUrlOverride("   ");
     assert.equal(
       getRequiredModel("gpt-5.6-luna").baseUrl,
       "https://api.openai.com/v1",
-      "whitespace-only env must be treated as unset",
+      "a whitespace-only override must be treated as unset",
     );
   } finally {
-    if (prior === undefined) delete process.env.QM_PI_BASE_URL;
-    else process.env.QM_PI_BASE_URL = prior;
+    setPiBaseUrlOverride(undefined);
   }
+});
+
+test("QM_PI_BASE_URL reaches pi-models through loadConfig, not a direct env read", async () => {
+  // The boundary is the point of the indirection: if config stops carrying the value,
+  // or buildApp stops injecting it, the override silently stops working in production
+  // while the unit test above still passes.
+  const { loadConfig } = await import("../src/config.ts");
+  assert.equal(
+    loadConfig({ QM_PI_BASE_URL: "  http://127.0.0.1:8098/v1  " }).piBaseUrl,
+    "http://127.0.0.1:8098/v1",
+    "loadConfig must parse and trim the override",
+  );
+  assert.equal(loadConfig({}).piBaseUrl, undefined, "an unset override must not appear in config");
+  assert.equal(
+    loadConfig({ QM_PI_BASE_URL: "   " }).piBaseUrl,
+    undefined,
+    "whitespace-only must not become a config value",
+  );
 });
