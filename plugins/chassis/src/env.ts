@@ -13,3 +13,11 @@ if (!secret(process.env.PORTAL_IDENTITY_SECRET) && CORE_SIGNING_SECRET) {
 export function portFromEnv(fallback: number): number {
   return Number(process.env.PORT ?? fallback);
 }
+
+// Host to bind the listening socket to. Unset means every interface, which is
+// what a container deployment wants; a self-hosted install that puts a front
+// door (portal, or an identity shim) ahead of a surface sets 127.0.0.1 so the
+// raw surface cannot be reached around it.
+export function bindHostFromEnv(): string | undefined {
+  return process.env.BIND_HOST?.trim() || undefined;
+}

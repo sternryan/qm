@@ -13,12 +13,14 @@ import {
   CORE_SIGNING_SECRET,
   PORTAL_IDENTITY_SECRET,
   portFromEnv,
+  bindHostFromEnv,
 } from "../../chassis/src/env.ts";
 import { readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 
 const PORT = portFromEnv(8090);
+const BIND_HOST = bindHostFromEnv();
 const ADMIN_BASE_PATH = (process.env.ADMIN_BASE_PATH ?? "").replace(/\/$/, "");
 function signedHeaders(method: string, corePath: string, rawBody: string): Record<string, string> {
   return signedRequestHeaders(CORE_SIGNING_SECRET, method, corePath, rawBody, { "content-type": "application/json" });
@@ -445,8 +447,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 }
 
 export function startServer(): void {
-  server.listen(PORT, () => {
-    console.log(`[admin-plugin] http://localhost:${PORT}  → core ${CORE} (org=${ORG})`);
+  server.listen(PORT, BIND_HOST, () => {
+    console.log(`[admin-plugin] http://${BIND_HOST ?? "0.0.0.0"}:${PORT}  → core ${CORE} (org=${ORG})`);
     console.warn(
       "[admin-plugin] trusting the portal-synthesized admin cookie as identity — this app MUST stay private (no public http_service); reachable only through the private portal service.",
     );

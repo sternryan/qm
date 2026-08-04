@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import { json } from "../../chassis/src/http.ts";
-import { portFromEnv } from "../../chassis/src/env.ts";
+import { portFromEnv, bindHostFromEnv } from "../../chassis/src/env.ts";
 import { bootProblems, readConfig } from "./config.ts";
 import { coreClaimStore } from "../../chassis/src/claims.ts";
 import { mailerFor } from "./email.ts";
@@ -10,6 +10,7 @@ import { TokenSigner } from "./tokens.ts";
 import { createAuthHandler } from "./server.ts";
 
 const PORT = portFromEnv(8099);
+const BIND_HOST = bindHostFromEnv();
 const IS_PROD = process.env.NODE_ENV === "production";
 const CFG = readConfig(process.env);
 
@@ -37,9 +38,9 @@ export async function startServer(): Promise<void> {
       else res.end();
     });
   });
-  server.listen(PORT, () => {
+  server.listen(PORT, BIND_HOST, () => {
     console.log(
-      `[auth] sign-in broker on http://localhost:${PORT} (issuer ${CFG.issuer}, key ${signingKey.kid}, ${CFG.transport} email)`,
+      `[auth] sign-in broker on http://${BIND_HOST ?? "0.0.0.0"}:${PORT} (issuer ${CFG.issuer}, key ${signingKey.kid}, ${CFG.transport} email)`,
     );
     if (!CFG.coreSigningSecret)
       console.warn(

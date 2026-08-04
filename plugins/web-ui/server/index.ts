@@ -26,10 +26,11 @@ import {
   CORE_SIGNING_SECRET,
   PORTAL_IDENTITY_SECRET,
   portFromEnv,
+  bindHostFromEnv,
 } from "../../chassis/src/env.ts";
 
 const PORT = portFromEnv(8096);
-const BIND_HOST = process.env.WEB_UI_BIND_HOST?.trim() || undefined;
+const BIND_HOST = bindHostFromEnv();
 const PUBLIC_URL = (process.env.WEB_UI_PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
 const WEB_UI_DEV = process.env.WEB_UI_DEV === "1";
 const ALLOW_UNSIGNED_TEST_IDENTITY =

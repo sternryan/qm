@@ -47,9 +47,11 @@ import {
   CORE_SIGNING_SECRET,
   PORTAL_IDENTITY_SECRET,
   portFromEnv,
+  bindHostFromEnv,
 } from "../../chassis/src/env.ts";
 
 const PORT = portFromEnv(8097);
+const BIND_HOST = bindHostFromEnv();
 const PUBLIC_URL = (process.env.PORTAL_PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
 const SESSION_SECRET = process.env.PORTAL_SESSION_SECRET;
 const SESSION_TTL_S = Number(process.env.PORTAL_SESSION_TTL_S ?? 28800);
@@ -1315,8 +1317,10 @@ function validEmailDomain(value: string): boolean {
 
 export function startServer(): void {
   bootChecks();
-  server.listen(PORT, () => {
-    console.log(`[portal] public front door on http://localhost:${PORT} → web-ui/admin over 6PN (org ${ORG})`);
+  server.listen(PORT, BIND_HOST, () => {
+    console.log(
+      `[portal] public front door on http://${BIND_HOST ?? "0.0.0.0"}:${PORT} → web-ui/admin over 6PN (org ${ORG})`,
+    );
     if (!SESSION_SECRET)
       console.warn("[portal] PORTAL_SESSION_SECRET unset — using an INSECURE dev key (dev/test only)");
     if (!SECURE_COOKIES)
