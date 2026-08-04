@@ -1768,3 +1768,29 @@ test("brain: the reader's own ok:false refusal surfaces as an error, not an empt
     globalThis.fetch = realFetch;
   }
 });
+
+test("brain: a refusal carried on a non-2xx status still surfaces its detail", async () => {
+  // The reader answers page_not_found with HTTP 403 AND the detail in the body
+  // (corpus/main.py sends 403 whenever the upstream call errored). Branching on
+  // status first turned every legitimate "not in your corpus" into
+  // "HTTP 403", which reads as broken infrastructure rather than the boundary
+  // doing its job. Seen live 2026-08-04.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ ok: false, text: JSON.stringify({ error: "page_not_found" }) }), {
+      status: 403,
+      headers: { "content-type": "application/json" },
+    })) as typeof globalThis.fetch;
+  try {
+    const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: "personal:U1" };
+    const brain = createPiTools(ref, { corpusReaders: { "personal:U1": "http://127.0.0.1:8099" } }).find(
+      (t) => t.name === "brain",
+    );
+    assert.ok(brain);
+    const res = await callTool(brain, "c4", { action: "get_page", slug: "nope" });
+    assert.match(res.content[0]?.text ?? "", /page_not_found/);
+    assert.doesNotMatch(res.content[0]?.text ?? "", /HTTP 403/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

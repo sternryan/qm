@@ -2464,20 +2464,25 @@ export function createPiTools(ref: ToolContextRef, opts?: PiToolsOptions): ToolD
           body: JSON.stringify({ tool: params.action, arguments: args }),
           signal: AbortSignal.timeout(CORPUS_READ_TIMEOUT_MS),
         });
-        if (!res.ok)
+        // ⚠ Do NOT branch on res.ok before reading the body. The reader answers a
+        // REFUSAL (page not found, tool not allowed) with a non-2xx status AND the
+        // useful detail in the body -- so status-first turns "that page is not in
+        // your corpus" into "HTTP 403", which reads as broken infrastructure
+        // rather than as the boundary working. Parse first, fall back second.
+        const body = (await res.json().catch(() => null)) as { ok?: boolean; text?: string } | null;
+        if (!body || (body.ok === undefined && typeof body.text !== "string"))
           return recordResult(
             callId,
             { tool: "brain", action: params.action, status: res.status },
             text(`[brain read failed] the knowledge base returned HTTP ${res.status}`),
             true,
           );
-        const body = (await res.json()) as { ok?: boolean; text?: string };
         const out = typeof body.text === "string" ? body.text : "";
         // The reader reports its own refusals (unknown tool, not found) as ok:false
         // with the detail in `text`. Surfacing that verbatim as an error keeps a
         // refusal distinguishable from an empty result -- absence and failure must
         // not read the same.
-        if (body.ok === false)
+        if (body.ok === false || !res.ok)
           return recordResult(
             callId,
             { tool: "brain", action: params.action, ok: false },
