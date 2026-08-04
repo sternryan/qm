@@ -96,6 +96,7 @@ export interface PiHarnessOptions {
   turnWallClockMs?: number;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
+  corpusReaders?: Record<string, string>;
   backgroundJobTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
   signals?: RunSignalStore;
@@ -1294,6 +1295,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           ...(opts?.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: opts.execTimeoutCeilingMs } : {}),
           ...(opts?.backgroundJobTtlMs !== undefined ? { backgroundJobTtlMs: opts.backgroundJobTtlMs } : {}),
           ...(opts?.backgroundJobTtlMaxMs !== undefined ? { backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs } : {}),
+          ...(opts?.corpusReaders ? { corpusReaders: opts.corpusReaders } : {}),
         }),
         noTools: "builtin",
         sessionManager: SessionManager.inMemory(undefined, { id: sessionId }),
