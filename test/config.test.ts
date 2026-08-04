@@ -452,10 +452,6 @@ test("CORPUS_READERS rejects a malformed entry rather than silently dropping it"
 });
 
 test("CORPUS_READERS reaches the pi harness options, not just Config", () => {
-  // pi-harness enumerates its tool options by hand instead of spreading
-  // coreToolOptions, so a new option can reach Config and still never arrive at
-  // the tools. That is exactly what happened here: the tool was invisible to the
-  // pi harness -- the one Ryn runs -- while every other harness had it.
   const config = loadConfig({ ...productionEnv, CORPUS_READERS: "personal:a=http://127.0.0.1:8099" });
   assert.deepEqual(piHarnessConfigOptions(config).corpusReaders, { "personal:a": "http://127.0.0.1:8099" });
 });

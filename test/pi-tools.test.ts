@@ -1693,8 +1693,6 @@ test("pauseStampAfterToolCall stamps terminate on sibling results once the turn 
   assert.deepEqual(await withPrior({}, undefined), { terminate: true });
 });
 
-// ToolDefinition.execute is declared with more parameters than the runtime call
-// site uses; src/harness/pi-tools.ts casts it the same way in withToolApprovalGate.
 type ToolResult = { content: Array<{ text?: string }> };
 const callTool = (t: { execute: unknown }, callId: string, params: unknown): Promise<ToolResult> =>
   (t.execute as (callId: string, params: unknown) => Promise<ToolResult>)(callId, params);
@@ -1712,8 +1710,6 @@ test("brain: absent unless the deployment configures a corpus reader", () => {
 });
 
 test("brain: a scope with no mapping is refused, never silently served another scope's corpus", async () => {
-  // The whole isolation story rests on this: a fallback here would hand one
-  // person's corpus to another. Assert the refusal, not just the absence.
   const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: "personal:unmapped" };
   const brain = createPiTools(ref, { corpusReaders: { "personal:U1": "http://127.0.0.1:8099" } }).find(
     (t) => t.name === "brain",
@@ -1770,11 +1766,6 @@ test("brain: the reader's own ok:false refusal surfaces as an error, not an empt
 });
 
 test("brain: a refusal carried on a non-2xx status still surfaces its detail", async () => {
-  // The reader answers page_not_found with HTTP 403 AND the detail in the body
-  // (corpus/main.py sends 403 whenever the upstream call errored). Branching on
-  // status first turned every legitimate "not in your corpus" into
-  // "HTTP 403", which reads as broken infrastructure rather than the boundary
-  // doing its job. Seen live 2026-08-04.
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () =>
     new Response(JSON.stringify({ ok: false, text: JSON.stringify({ error: "page_not_found" }) }), {
