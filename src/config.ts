@@ -7,6 +7,7 @@ import {
   type MemoryRecallMode,
 } from "./memory/policy.ts";
 import { parseMemoryStrategyKind, type MemoryStrategyKind } from "./memory/strategy.ts";
+import type { EgressEnforcement } from "./sandbox/sandbox.ts";
 import { validateCoreSecretEnv } from "./deployment/secret-schema.ts";
 import { DEFAULT_CAPTURE_QUIET_MS } from "./memory/strategies/per-turn.ts";
 import { parseSecurityPosture, type SecurityPosture } from "./security/security-posture.ts";
@@ -248,6 +249,7 @@ interface LocalSandboxEnv {
   cpus?: number;
   memoryMb?: number;
   defaultTimeoutSec?: number;
+  egressEnforcement?: EgressEnforcement;
 }
 
 function localSandboxEnv(env: NodeJS.ProcessEnv): LocalSandboxEnv {
@@ -262,6 +264,10 @@ function localSandboxEnv(env: NodeJS.ProcessEnv): LocalSandboxEnv {
       : {}),
     ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
       ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
+      : {}),
+    ...(env.LOCAL_SANDBOX_EGRESS_ENFORCEMENT?.trim() === "ip_port" ||
+    env.LOCAL_SANDBOX_EGRESS_ENFORCEMENT?.trim() === "domain"
+      ? { egressEnforcement: env.LOCAL_SANDBOX_EGRESS_ENFORCEMENT.trim() as EgressEnforcement }
       : {}),
   };
 }

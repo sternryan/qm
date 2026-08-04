@@ -19,6 +19,7 @@ import { shortHash } from "../util/crypto.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import type {
   AgentComputerProfile,
+  EgressEnforcement,
   ExecOptions,
   ExecResult,
   ProvisionOptions,
@@ -48,6 +49,7 @@ export interface LocalSandboxOptions {
   repoRoot?: string;
   dockerExec?: DockerExec;
   fetchImpl?: typeof fetch;
+  egressEnforcement?: EgressEnforcement;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
@@ -319,7 +321,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     backend: "local-docker",
     writablePersistence: "resident_disk",
     processSessions: true,
-    egressEnforcement: "none",
+    egressEnforcement: opts.egressEnforcement ?? "none",
     spec: {
       os: `Debian 12 (bookworm), glibc — local Docker container on a ${arch()} host (dev only)`,
       runtimes: ["Node 24", "Python 3 (venv on PATH — `pip install` just works)"],
