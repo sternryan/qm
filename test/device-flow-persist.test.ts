@@ -826,3 +826,38 @@ test("a nonlegacy policy never places brokered STS on a shared room when isolati
   });
   assert.equal(only.reply, "unset|absent");
 });
+
+test("a claude subscription login is captured as its own service", async () => {
+  const sb = sprites();
+  const k = kc();
+  const h = await sb.provision(rw(scopeId("personal", "U1")));
+  const login = await sb.run(
+    h,
+    "mkdir -p ~/.claude && printf '{\"accessToken\":\"sk-ant-oat-SECRET\"}' > ~/.claude/.credentials.json",
+  );
+  assert.equal(login.code, 0, login.stderr);
+
+  assert.deepEqual(await captureDeviceFlowLogins({ sandbox: sb, handle: h, keychain: k, ownerId: "U1" }), ["claude"]);
+
+  const saved = (await k.listByOwner("U1")).find((c) => c.service === "claude");
+  assert.equal(saved?.kind, "file");
+  assert.deepEqual(saved?.targets, [".claude/.credentials.json"]);
+});
+
+test("capturing a claude login leaves the rest of ~/.claude behind", async () => {
+  const sb = sprites();
+  const k = kc();
+  const h = await sb.provision(rw(scopeId("personal", "U1")));
+  const login = await sb.run(
+    h,
+    "mkdir -p ~/.claude/projects/demo && printf '{\"accessToken\":\"sk-ant-oat-SECRET\"}' > ~/.claude/.credentials.json && " +
+      "printf 'PRIVATE_TRANSCRIPT' > ~/.claude/projects/demo/session.jsonl && " +
+      "printf '{\"theme\":\"dark\"}' > ~/.claude/settings.json",
+  );
+  assert.equal(login.code, 0, login.stderr);
+
+  await captureDeviceFlowLogins({ sandbox: sb, handle: h, keychain: k, ownerId: "U1" });
+
+  const saved = (await k.listByOwner("U1")).find((c) => c.service === "claude");
+  assert.deepEqual(saved?.targets, [".claude/.credentials.json"]);
+});

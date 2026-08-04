@@ -16,6 +16,8 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { fromJSONSchema, type ZodObject } from "zod";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
+import { prepareClaudeCredentials } from "./claude-credentials.ts";
+import type { CredentialFile } from "../credentials/keychain.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import {
   contextTokenBudgetForModel,
@@ -47,6 +49,8 @@ export interface ClaudeHarnessOptions {
   judgeModelId?: string;
   binaryPath?: string;
   env?: NodeJS.ProcessEnv;
+  deploymentCredentialScope?: string;
+  loadOwnCredentials?: (scope: ScopeId) => Promise<readonly CredentialFile[] | null>;
   scratchExec?: boolean;
   ownerAuthExec?: boolean;
   reachExec?: boolean;
@@ -69,6 +73,9 @@ export function claudeHarnessConfigOptions(config: Config): ClaudeHarnessOptions
       : {}),
     ...(config.claudeBinPath ? { binaryPath: config.claudeBinPath } : {}),
     env: config.claudeProcessEnv,
+    ...(config.claudeDeploymentCredentialScope
+      ? { deploymentCredentialScope: config.claudeDeploymentCredentialScope }
+      : {}),
     ...coreToolOptions(config),
     turnWallClockMs: config.turnWallClockMs,
   };
@@ -119,9 +126,21 @@ const CLAUDE_ENV_PASSTHROUGH = [
   "CLAUDE_CODE_OAUTH_TOKEN",
 ] as const;
 
-export function claudeChildEnv(source: NodeJS.ProcessEnv, jail: string): NodeJS.ProcessEnv {
+export const CLAUDE_DEPLOYMENT_AUTH_ENV: readonly string[] = [
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+];
+
+export function claudeChildEnv(
+  source: NodeJS.ProcessEnv,
+  jail: string,
+  options: { deploymentAuth?: boolean } = {},
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { HOME: jail, CLAUDE_CONFIG_DIR: join(jail, ".claude") };
+  const deploymentAuth = options.deploymentAuth !== false;
   for (const name of CLAUDE_ENV_PASSTHROUGH) {
+    if (!deploymentAuth && CLAUDE_DEPLOYMENT_AUTH_ENV.includes(name)) continue;
     if (source[name] !== undefined) env[name] = source[name];
   }
   return env;
@@ -307,6 +326,10 @@ export function stripClaudeImageBytes(message: SDKMessage): unknown {
   );
 }
 
+export function isInternalClaudeScope(scope: ScopeId | undefined): boolean {
+  return scope !== undefined && typeof scope !== "string";
+}
+
 function effort(level: string | undefined): "low" | "medium" | "high" | "xhigh" | "max" | undefined {
   return level === "low" || level === "medium" || level === "high" || level === "xhigh" || level === "max"
     ? level
@@ -330,6 +353,21 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     const jail = mkdtempSync(join(tmpdir(), "qm-claude-"));
     const processIdentity = claudeProcessIdentity();
     if (processIdentity) chownSync(jail, processIdentity.uid, processIdentity.gid);
+    let deploymentAuth = true;
+    if (opts.deploymentCredentialScope && !isInternalClaudeScope(turn.scopeLabel)) {
+      try {
+        ({ deploymentAuth } = await prepareClaudeCredentials({
+          ...(turn.scopeLabel ? { scope: turn.scopeLabel } : {}),
+          deploymentScope: opts.deploymentCredentialScope,
+          jail,
+          ...(processIdentity ? { identity: processIdentity } : {}),
+          ...(opts.loadOwnCredentials ? { loadOwnFiles: opts.loadOwnCredentials } : {}),
+        }));
+      } catch (error) {
+        rmSync(jail, { recursive: true, force: true });
+        throw error;
+      }
+    }
     const ref = claudeToolContext(turn);
     const controller = new AbortController();
     ref.abortSignal = controller.signal;
@@ -431,7 +469,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       options: {
         abortController: controller,
         cwd: jail,
-        env: claudeChildEnv(opts.env ?? {}, jail),
+        env: claudeChildEnv(opts.env ?? {}, jail, { deploymentAuth }),
         tools: allowSubagents ? ["Agent"] : [],
         skills: [],
         settingSources: [],

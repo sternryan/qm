@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   claudeChildAgentAllowed,
   claudeChildEnv,
+  isInternalClaudeScope,
   claudeProcessIdentity,
   claudeReplayTranscript,
   claudeToolContext,
@@ -10,6 +11,7 @@ import {
   stripClaudeImageBytes,
 } from "../src/harness/claude-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
+import type { ScopeId } from "../src/types.ts";
 import { zeroUsage, type PiReplayMessage } from "../src/harness/replay.ts";
 
 test("Claude forwards external-content screening into its native tool bridge", () => {
@@ -124,4 +126,44 @@ test("Claude spawned from a root container runs as nobody", { skip: process.getu
   });
   assert.equal(code, 0);
   assert.equal(output, "65534");
+});
+
+test("a scope on its own login does not inherit the deployment's Claude credentials", () => {
+  const env = claudeChildEnv(
+    {
+      PATH: "/usr/bin",
+      ANTHROPIC_API_KEY: "sk-ant-DEPLOYMENT",
+      ANTHROPIC_AUTH_TOKEN: "deployment-auth",
+      CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-DEPLOYMENT",
+      ANTHROPIC_BASE_URL: "https://gateway.internal",
+    },
+    "/tmp/jail",
+    { deploymentAuth: false },
+  );
+
+  assert.equal(env.ANTHROPIC_API_KEY, undefined);
+  assert.equal(env.ANTHROPIC_AUTH_TOKEN, undefined);
+  assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+  assert.equal(env.PATH, "/usr/bin");
+  assert.equal(env.ANTHROPIC_BASE_URL, "https://gateway.internal");
+});
+
+test("the deployment owner still receives the deployment's Claude credentials", () => {
+  const env = claudeChildEnv({ CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-DEPLOYMENT" }, "/tmp/jail", {
+    deploymentAuth: true,
+  });
+  assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, "sk-ant-oat-DEPLOYMENT");
+});
+
+test("qm's own oneshot scope is internal, so titles and detection keep using the deployment credential", () => {
+  assert.equal(isInternalClaudeScope({ kind: "org", id: "oneshot" } as unknown as ScopeId), true);
+});
+
+test("a real conversation scope is never treated as internal", () => {
+  assert.equal(isInternalClaudeScope("personal:NyrW@github"), false);
+  assert.equal(isInternalClaudeScope("org:acme"), false);
+});
+
+test("a missing scope is not internal, so it is refused rather than waved through", () => {
+  assert.equal(isInternalClaudeScope(undefined), false);
 });

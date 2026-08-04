@@ -165,6 +165,7 @@ import { createMockHarness } from "./harness/mock-harness.ts";
 import { createOpenCodeHarness, openCodeHarnessConfigOptions } from "./harness/opencode-harness.ts";
 import { createCodexHarness, codexHarnessConfigOptions } from "./harness/codex-harness.ts";
 import { createClaudeHarness, claudeHarnessConfigOptions } from "./harness/claude-harness.ts";
+import { CLAUDE_CREDENTIAL_SERVICE, claudeCredentialOwner } from "./harness/claude-credentials.ts";
 import { createPiHarness, piHarnessConfigOptions } from "./harness/pi-harness.ts";
 import { createHarnessRouter, resolveRuntimeChoiceDurable } from "./harness/harness-router.ts";
 import type { Harness, HarnessModelUtilities } from "./harness/harness.ts";
@@ -699,6 +700,12 @@ export function buildApp(
   const runtimeOrgScope = scopeId("org", config.orgId);
   const orgBaseModelId = (): string | undefined =>
     configStore.getRuntimeSelection(runtimeOrgScope)?.modelId ?? configStore.getBaseModel(runtimeOrgScope) ?? undefined;
+  const loadClaudeCredentials = async (scope: ScopeId) => {
+    if (!keychain) return null;
+    const owner = claudeCredentialOwner(scope);
+    const held = await keychain.materializeOwnFiles(owner);
+    return held.find((cred) => cred.service === CLAUDE_CREDENTIAL_SERVICE)?.files ?? null;
+  };
   const adapters = new Map<HarnessId, Harness>([
     [
       "pi",
@@ -711,7 +718,15 @@ export function buildApp(
     ],
     ["opencode", createOpenCodeHarness({ ...openCodeHarnessConfigOptions(config), signals: runSignals, tasks })],
     ["codex", createCodexHarness({ ...codexHarnessConfigOptions(config), signals: runSignals, tasks })],
-    ["claude", createClaudeHarness({ ...claudeHarnessConfigOptions(config), signals: runSignals, tasks })],
+    [
+      "claude",
+      createClaudeHarness({
+        ...claudeHarnessConfigOptions(config),
+        ...(keychain ? { loadOwnCredentials: loadClaudeCredentials } : {}),
+        signals: runSignals,
+        tasks,
+      }),
+    ],
     ["mock", createMockHarness()],
   ]);
   const fallbackHarness = config.harness as HarnessId;

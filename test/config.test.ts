@@ -467,3 +467,17 @@ test("CORPUS_READERS reaches EVERY harness, not just the one that was tested", (
   assert.deepEqual(codexHarnessConfigOptions(config).corpusReaders, want);
   assert.deepEqual(openCodeHarnessConfigOptions(config).corpusReaders, want);
 });
+
+test("CLAUDE_DEPLOYMENT_CREDENTIAL_SCOPE names the one scope that keeps using the deployment token", () => {
+  const config = loadConfig({ ...productionEnv, CLAUDE_DEPLOYMENT_CREDENTIAL_SCOPE: "personal:sternryan@github" });
+  assert.equal(config.claudeDeploymentCredentialScope, "personal:sternryan@github");
+});
+
+test("CLAUDE_DEPLOYMENT_CREDENTIAL_SCOPE unset leaves no scope holding the deployment token", () => {
+  assert.equal(loadConfig({ ...productionEnv }).claudeDeploymentCredentialScope, undefined);
+});
+
+test("CLAUDE_DEPLOYMENT_CREDENTIAL_SCOPE reaches the claude harness options, not just Config", () => {
+  const config = loadConfig({ ...productionEnv, CLAUDE_DEPLOYMENT_CREDENTIAL_SCOPE: "personal:sternryan@github" });
+  assert.equal(claudeHarnessConfigOptions(config).deploymentCredentialScope, "personal:sternryan@github");
+});

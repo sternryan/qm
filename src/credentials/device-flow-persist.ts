@@ -23,6 +23,7 @@ const CRED_DOTDIRS = [
   ".gem",
 ];
 const CRED_DOTFILES = [
+  ".claude/.credentials.json",
   ".netrc",
   ".git-credentials",
   ".pgpass",
