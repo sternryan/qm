@@ -23,6 +23,8 @@ class FakeSlackClient {
   readonly membersByChannel = new Map<string, string[]>();
   readonly messagesByChannel = new Map<string, any[]>();
   readonly membershipFailures = new Set<string>();
+  groupListings = 0;
+  failGroupListing = false;
   private postSequence = 0;
 
   readonly auth = {
@@ -110,6 +112,10 @@ class FakeSlackClient {
     }
     if (method === "conversations.list") {
       const types = String(args.types ?? "");
+      if (types === "mpim") {
+        this.groupListings++;
+        if (this.failGroupListing) throw new Error("missing mpim:read");
+      }
       yield {
         channels: [...this.channelsById.values()].filter((c) => (types === "mpim" ? c.is_mpim : !c.is_mpim)),
       };
@@ -192,12 +198,16 @@ class FakeCore implements SlackCoreClient {
   readonly polled: string[] = [];
   private runGate: Promise<void> | undefined;
   private releaseRun: (() => void) | undefined;
+  readonly modelChangeListeners: Array<(scope: any) => void> = [];
 
   async externalSlackParticipants(): Promise<boolean> {
     return this.externalParticipants;
   }
-  async effectiveModelName(): Promise<string> {
-    return "Claude Opus 4.8";
+  async surfaceHeaderFacts(): Promise<{ agentLabel?: string; modelName: string }> {
+    return { agentLabel: "Quartermaster", modelName: "Claude Opus 4.8" };
+  }
+  onScopeModelChanged(listener: (scope: any) => void): void {
+    this.modelChangeListeners.push(listener);
   }
   async stageBlob(bytes: Uint8Array): Promise<{ blobId: string; sizeBytes: number }> {
     return { blobId: "blob-1", sizeBytes: bytes.byteLength };
@@ -399,7 +409,8 @@ test("a human's DM sets the conversation header to the serving model + web surfa
     assert.deepEqual(f.client.topics, [
       {
         channel: "D1",
-        topic: "Model: Claude Opus 4.8 · https://claw.example.dev/contexts?scope=personal%3AU1",
+        topic:
+          "Quartermaster is using Claude Opus 4.8 here. <https://claw.example.dev/contexts?scope=personal%3AU1|More settings>",
       },
     ]);
     await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "again", ts: "100.2" });
@@ -420,10 +431,32 @@ test("a channel's description names the channel's own default model and project 
     assert.deepEqual(f.client.purposes, [
       {
         channel: "C1",
-        purpose: "Model: Claude Opus 4.8 · https://claw.example.dev/contexts?scope=channel%3AC1",
+        purpose:
+          "Quartermaster is using Claude Opus 4.8 here. <https://claw.example.dev/projects/channel/C1|More settings>",
       },
     ]);
     assert.deepEqual(f.client.topics, [], "a channel's topic stays the members' own scratch space");
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a scope's model change rewrites its channel description without waiting for a message", async () => {
+  const f = await fixture({ webUiPublicUrl: "https://claw.example.dev" });
+  try {
+    assert.equal(f.core.modelChangeListeners.length, 1, "the plugin subscribes to core's model changes");
+    for (const listener of f.core.modelChangeListeners) listener("channel:C1");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(f.client.purposes, [
+      {
+        channel: "C1",
+        purpose:
+          "Quartermaster is using Claude Opus 4.8 here. <https://claw.example.dev/projects/channel/C1|More settings>",
+      },
+    ]);
+    for (const listener of f.core.modelChangeListeners) listener("personal:alice@example.com");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(f.client.topics, [], "a DM's topic settles on the person's next message, not on a push");
   } finally {
     await f.stop();
   }
@@ -642,6 +675,82 @@ test("a group-DM thread-follow runs unprompted yet attests its author's liveness
     assert.equal(f.core.turns[0].liveActor, true, "a member's own verbatim follow-up is a live act");
     assert.equal(f.core.turns[0].conversation.kind, "group");
     assert.equal(f.core.turns[0].conversation.threadRef, "grp:G1:300.1");
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a message from an unseen group DM resyncs the directory so it becomes addressable", async () => {
+  const f = await fixture();
+  try {
+    f.client.channelsById.set("G9", { id: "G9", name: "", is_member: true, is_private: true, is_mpim: true });
+    f.client.membersByChannel.set("G9", ["U1", "U2", "UBOT"]);
+    const listedBefore = f.client.groupListings;
+    await f.app.emitMessage({ channel: "G9", channel_type: "mpim", user: "U1", text: "hi", ts: "400.1" });
+    await waitFor(() => f.client.groupListings > listedBefore);
+    await waitFor(() => (f.core.directories.at(-1)?.groupMembers ?? []).some((g: any) => g.groupId === "G9"));
+    assert.deepEqual(
+      f.core.directories
+        .at(-1)
+        .groupMembers.filter((g: any) => g.groupId === "G9")
+        .map((g: any) => g.principalId)
+        .sort(),
+      ["U1", "U2"],
+      "the new group's internal roster reaches core, bot excluded",
+    );
+
+    const listedAfter = f.client.groupListings;
+    await f.app.emitMessage({ channel: "G9", channel_type: "mpim", user: "U1", text: "again", ts: "400.2" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(f.client.groupListings, listedAfter, "a group DM already seen does not resync on every message");
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a failed group listing pushes its fallback rows under the OLD stamp, never a fresh one", async () => {
+  const f = await fixture();
+  try {
+    f.client.channelsById.set("G7", { id: "G7", name: "", is_member: true, is_private: true, is_mpim: true });
+    f.client.membersByChannel.set("G7", ["U1", "U2", "UBOT"]);
+    await f.app.emitMessage({ channel: "G7", channel_type: "mpim", user: "U1", text: "hi", ts: "402.1" });
+    await waitFor(() =>
+      f.core.directories.some((d: any) => (d.groupMembers ?? []).some((g: any) => g.groupId === "G7")),
+    );
+    const goodStamp = f.core.directories.findLast((d: any) => d.groupsSyncedAt !== undefined).groupsSyncedAt;
+    assert.ok(goodStamp > 0);
+
+    f.client.failGroupListing = true;
+    f.client.channelsById.set("G6", { id: "G6", name: "", is_member: true, is_private: true, is_mpim: true });
+    await f.app.emitMessage({ channel: "G6", channel_type: "mpim", user: "U1", text: "hi", ts: "402.2" });
+    await waitFor(() => f.core.directories.findLast((d: any) => d.channels)?.channelsSyncedAt > goodStamp);
+    const last = f.core.directories.findLast((d: any) => d.channels);
+    assert.equal(
+      last.groupMembers,
+      undefined,
+      "a failed group listing must omit the groups section, never ship rows under a fresh stamp",
+    );
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a group DM whose listing fails is retried at most once, never once per message", async () => {
+  const f = await fixture();
+  try {
+    f.client.channelsById.set("G8", { id: "G8", name: "", is_member: true, is_private: true, is_mpim: true });
+    f.client.membersByChannel.set("G8", ["U1", "U2", "UBOT"]);
+    f.client.failGroupListing = true;
+    const listedBefore = f.client.groupListings;
+    for (const ts of ["401.1", "401.2", "401.3"]) {
+      await f.app.emitMessage({ channel: "G8", channel_type: "mpim", user: "U1", text: "hi", ts });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(
+      f.client.groupListings - listedBefore,
+      1,
+      "a failing listing must not make every message trigger another full sync",
+    );
   } finally {
     await f.stop();
   }

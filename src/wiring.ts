@@ -1122,6 +1122,7 @@ export function buildApp(
       const choice = await resolveRuntimeChoiceDurable(configStore, runtimeOrgScope, scopeLabel, fallback);
       return choice.modelId;
     },
+    ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
     // ⚠ FAB-1: resolved per the channel's own scope via modelsForScope, never
     // harness.models.pickAckEmoji -- see ambientJudge's comment above for why.
     pickAckEmoji: async (scopeLabel: ScopeId, t: string, c: readonly string[]) => {

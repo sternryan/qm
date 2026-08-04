@@ -20,6 +20,7 @@ import { CONFIG_DEFAULTS } from "../../config.ts";
 import { resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
 import { mintDeployOwnerToken, verifyDeployGitAccess, verifyDeployOwnerToken } from "../../deploy/access-token.ts";
 import { EDIT_WIDGET_JS, EDIT_WIDGET_PATH_PREFIX, editWidgetTag } from "../../deploy/edit-widget.ts";
+import { principalDestination } from "../../reach/reach.ts";
 import { portalSessionSub } from "../../deploy/viewer-session.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
 
@@ -127,6 +128,10 @@ const GATEWAY_AUTH_HEADERS = [
 ];
 
 const PROXY_BUFFER_MAX_BYTES = 10_000_000;
+const AGENT_FETCH_DEFAULT_MAX_BYTES = 256 * 1024;
+const AGENT_FETCH_MAX_BYTES = 1024 * 1024;
+const AGENT_FETCH_TIMEOUT_MS = 10_000;
+const AGENT_FETCH_MAX_REDIRECTS = 5;
 
 const THROTTLE_SHIELD_MS = 5_000;
 const throttledUpstreams = new Map<string, number>();
@@ -457,6 +462,173 @@ async function proxyReach(
   return;
 }
 
+interface DeploymentFetchResult {
+  status: number;
+  headers: Record<string, string | string[] | number | undefined>;
+  body: Buffer;
+  truncated: boolean;
+}
+
+function boundedResponseBody(
+  stream: NodeJS.ReadableStream & { destroy(error?: Error): void },
+  maxBytes: number,
+  timeoutMs = AGENT_FETCH_TIMEOUT_MS,
+): Promise<{ body: Buffer; truncated: boolean }> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let settled = false;
+    const timeout = setTimeout(() => stream.destroy(new Error("timeout")), Math.max(1, timeoutMs));
+    timeout.unref();
+    const finish = (truncated: boolean): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve({ body: Buffer.concat(chunks, Math.min(size, maxBytes)), truncated });
+      if (truncated) stream.destroy();
+    };
+    stream.on("data", (raw: Buffer | string) => {
+      const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+      const remaining = maxBytes - size;
+      if (remaining > 0) chunks.push(chunk.subarray(0, remaining));
+      size += Math.min(chunk.length, Math.max(remaining, 0));
+      if (chunk.length > remaining) finish(true);
+    });
+    stream.on("end", () => finish(false));
+    const fail = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      reject(error ?? new Error("upstream aborted"));
+    };
+    stream.on("error", fail);
+    stream.on("aborted", fail);
+  });
+}
+
+function deploymentFetchHttp1(
+  endpoint: Awaited<ReturnType<App["reachDeployment"]>> & { status: "ok" },
+  path: string,
+  maxBytes: number,
+  deadline: number,
+): Promise<DeploymentFetchResult> {
+  return new Promise((resolve, reject) => {
+    const { host, port, tls, proxyHeaders } = endpoint.endpoint;
+    const requestFn = tls ? httpsRequest : httpRequest;
+    const request = requestFn(
+      { hostname: host, port, path, method: "GET", headers: { ...proxyHeaders, "accept-encoding": "identity" } },
+      async (response) => {
+        clearTimeout(timeout);
+        try {
+          const collected = await boundedResponseBody(response, maxBytes, deadline - Date.now());
+          resolve({ status: response.statusCode ?? 502, headers: response.headers, ...collected });
+        } catch (error) {
+          reject(error);
+        }
+      },
+    );
+    const timeout = setTimeout(() => request.destroy(new Error("timeout")), Math.max(1, deadline - Date.now()));
+    timeout.unref();
+    request.on("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    request.end();
+  });
+}
+
+function deploymentFetchHttp2(
+  endpoint: Awaited<ReturnType<App["reachDeployment"]>> & { status: "ok" },
+  path: string,
+  maxBytes: number,
+  deadline: number,
+): Promise<DeploymentFetchResult> {
+  return new Promise((resolve, reject) => {
+    const { host, port, tls, proxyHeaders } = endpoint.endpoint;
+    const origin = `${tls ? "https" : "http"}://${host}:${port}`;
+    const connection = deploymentHttp2Session(origin);
+    const stream = connection.session.request({
+      ":method": "GET",
+      ":path": path,
+      ":authority": tls ? host : `${host}:${port}`,
+      "accept-encoding": "identity",
+      ...proxyHeaders,
+    });
+    connection.activeStreams++;
+    let headers: Record<string, string | string[] | number | undefined> = {};
+    stream.on("response", (responseHeaders) => {
+      headers = responseHeaders;
+    });
+    boundedResponseBody(stream, maxBytes, deadline - Date.now())
+      .then((collected) => resolve({ status: Number(headers[":status"] ?? 502), headers, ...collected }))
+      .catch(reject);
+    stream.once("close", () => releaseDeploymentHttp2Stream(origin, connection));
+    stream.end();
+  });
+}
+
+function normalizedDeploymentFetchPath(raw: string | null): string | null {
+  const path = raw ?? "/";
+  if (!path.startsWith("/") || path.includes("\\") || path.includes("\0")) return null;
+  try {
+    let decodedPath = path.split("?", 1)[0]!;
+    for (let depth = 0; depth < 8; depth++) {
+      const next = decodeURIComponent(decodedPath);
+      if (
+        next.includes("\\") ||
+        next.includes("\0") ||
+        next.split("/").some((segment) => segment === "." || segment === "..")
+      )
+        return null;
+      if (next === decodedPath) break;
+      if (depth === 7) return null;
+      decodedPath = next;
+    }
+    const normalized = new URL(path, "http://deployment.invalid");
+    if (normalized.origin !== "http://deployment.invalid") return null;
+    return normalized.pathname + normalized.search;
+  } catch {
+    return null;
+  }
+}
+
+function redirectPath(
+  endpoint: Awaited<ReturnType<App["reachDeployment"]>> & { status: "ok" },
+  location: string | string[] | number | undefined,
+  currentPath: string,
+): string | null {
+  if (typeof location !== "string") return null;
+  try {
+    const { host, port, tls } = endpoint.endpoint;
+    const origin = `${tls ? "https" : "http"}://${host}:${port}`;
+    const next = new URL(location, `${origin}${currentPath}`);
+    if (next.origin !== origin) return null;
+    return normalizedDeploymentFetchPath(next.pathname + next.search);
+  } catch {
+    return null;
+  }
+}
+
+async function fetchDeploymentResponse(
+  endpoint: Awaited<ReturnType<App["reachDeployment"]>> & { status: "ok" },
+  initialPath: string,
+  maxBytes: number,
+): Promise<DeploymentFetchResult> {
+  let path = initialPath;
+  const deadline = Date.now() + AGENT_FETCH_TIMEOUT_MS;
+  for (let redirects = 0; ; redirects++) {
+    const response =
+      endpoint.endpoint.httpVersion === "2"
+        ? await deploymentFetchHttp2(endpoint, path, maxBytes, deadline)
+        : await deploymentFetchHttp1(endpoint, path, maxBytes, deadline);
+    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+    if (redirects >= AGENT_FETCH_MAX_REDIRECTS) throw new Error("too many redirects");
+    const next = redirectPath(endpoint, response.headers.location, path);
+    if (!next) throw new Error("redirect leaves deployment");
+    path = next;
+  }
+}
+
 function cookieValue(header: string | undefined, name: string): string {
   for (const part of (header ?? "").split(";")) {
     const p = part.trim();
@@ -588,6 +760,32 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     if (deps.auditLog?.recordOnce) await deps.auditLog.recordOnce(`reach_denied|${sub}|${slug}|${hour}`, ev);
     else deps.auditLog?.record(ev);
   }
+  if (reach.status === "denied" && ctx.method === "POST" && pathname === REQUEST_ACCESS_PATH) {
+    const d = await app.getDeployment(slug).catch(() => null);
+    if (!d) {
+      sendJson(res, 404, { error: "not_found" });
+      return true;
+    }
+    // The recipient is the app's owner: the personal home scope if it has one, else whoever created it.
+    const [ownerKind, ownerRef] = String(d.ownerScopeId).split(":", 2);
+    const ownerId = ownerKind === "personal" && ownerRef ? ownerRef : d.createdBy;
+    const label = d.displayName ?? d.name ?? slug;
+    // One request per visitor per app per day — the idempotent outbox absorbs button mashing.
+    const day = Math.floor(Date.now() / 86_400_000);
+    try {
+      await app.enqueueDelivery({
+        destination: principalDestination(ownerId, sub),
+        text:
+          `${sub} is asking for access to your app "${label}" (https://${rawHost}/). ` +
+          `They signed in but the app isn't shared with them. To grant it, share the deployment with personal:${sub}.`,
+        idempotencyKey: `deploy-access-request:${slug}:${sub}:${day}`,
+      });
+      sendJson(res, 200, { ok: true });
+    } catch {
+      sendJson(res, 502, { error: "delivery_failed", message: "the request could not be delivered — try again later" });
+    }
+    return true;
+  }
   if (reach.status === "denied" && wantsHtml) {
     res.writeHead(403, {
       "content-type": "text/html; charset=utf-8",
@@ -615,11 +813,20 @@ p{color:#a3a3a3;margin:0 0 8px}b{color:#fafafa}a{color:#fafafa}</style></head>
 <body><div class="card"><h1>${escapeHtml(title)}</h1>${paragraphsHtml}</div></body></html>`;
 }
 
+const REQUEST_ACCESS_PATH = "/__claw__/request-access";
+
 function notSharedHtml(sub: string): string {
   return gateCardHtml(
     "This app hasn't been shared with you",
     `<p>You're signed in as <b>${escapeHtml(sub)}</b>, but this app's owner hasn't shared it with you.</p>
-<p>Ask the owner for access, or for the app's share link.</p>`,
+<p>Ask the owner for access, or for the app's share link.</p>
+<p><button id="req" style="margin-top:12px;padding:8px 18px;border-radius:8px;border:1px solid #3f3f3f;
+background:#fafafa;color:#0a0a0a;font:inherit;font-weight:600;cursor:pointer">Request access</button></p>
+<script>document.getElementById("req").addEventListener("click",async function(){
+var b=this;b.disabled=true;b.textContent="Sending\u2026";
+try{var r=await fetch(${JSON.stringify(REQUEST_ACCESS_PATH)},{method:"POST"});
+b.textContent=r.ok?"Request sent \u2713":"Couldn't send \u2014 try again";b.disabled=r.ok;}
+catch(e){b.textContent="Couldn't send \u2014 try again";b.disabled=false;}});</script>`,
   );
 }
 
@@ -910,6 +1117,54 @@ async function listDeployments(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { deployments });
 }
 
+function textContentType(contentType: string): boolean {
+  return (
+    /^text\//i.test(contentType) ||
+    /(?:^|\/)(?:json|xml|javascript)(?:;|$)/i.test(contentType) ||
+    /\+(?:json|xml)(?:;|$)/i.test(contentType)
+  );
+}
+
+async function fetchDeployment(ctx: ApiCtx): Promise<void> {
+  const { res, app, params, capability, actor, url } = ctx;
+  const viewer = capability?.actorId ?? actor?.p;
+  if (!viewer) return sendJson(res, 401, { error: "capability_required" });
+  const path = normalizedDeploymentFetchPath(url.searchParams.get("path"));
+  if (!path) return sendJson(res, 400, { error: "bad_request", message: "path must be a safe absolute path" });
+  const rawMaxBytes = url.searchParams.get("maxBytes");
+  const maxBytes = rawMaxBytes === null ? AGENT_FETCH_DEFAULT_MAX_BYTES : Number(rawMaxBytes);
+  if (!Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > AGENT_FETCH_MAX_BYTES) {
+    return sendJson(res, 400, {
+      error: "bad_request",
+      message: `maxBytes must be an integer from 1 to ${AGENT_FETCH_MAX_BYTES}`,
+    });
+  }
+  const reach = await app.reachDeployment(params.id!, viewer);
+  if (reach.status !== "ok") return sendJson(res, 404, { error: "not_found" });
+  try {
+    const response = await fetchDeploymentResponse(reach, path, maxBytes);
+    const rawContentType = response.headers["content-type"];
+    const contentType = typeof rawContentType === "string" ? rawContentType : "application/octet-stream";
+    if (textContentType(contentType)) {
+      return sendJson(res, 200, {
+        status: response.status,
+        contentType,
+        body: response.body.toString("utf8"),
+        truncated: response.truncated,
+      });
+    }
+    return sendJson(res, 200, {
+      status: response.status,
+      contentType,
+      body: response.body.toString("base64"),
+      encoding: "base64",
+      truncated: response.truncated,
+    });
+  } catch {
+    return sendJson(res, 502, { error: "upstream_unreachable" });
+  }
+}
+
 export async function getDeployment(ctx: ApiCtx): Promise<void> {
   const { res, app, url, secret, capability, params } = ctx;
   const principalId = capability ? capability.actorId : url.searchParams.get("principalId");
@@ -1112,6 +1367,7 @@ export const deploymentRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/deployments", auth: "source", handle: createDeployment },
   { method: "GET", path: "/v1/deployments", auth: "either", handle: listDeployments },
   { method: "GET", path: "/v1/deployments/:id", auth: "either", handle: getDeployment },
+  { method: "GET", path: "/v1/deployments/:id/fetch", auth: "either", handle: fetchDeployment },
   { method: "GET", path: "/v1/deployments/:id/git-url", auth: "either", handle: deploymentGitUrl },
   { method: "GET", path: "/v1/deployments/:id/owner-url", auth: "source", handle: deploymentOwnerUrl },
   { method: "POST", path: "/v1/deployments/:id/share", auth: "either", handle: shareDeployment },
