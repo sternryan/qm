@@ -104,9 +104,9 @@ await built.deploymentLayerReady;
 built.deploymentLayerRefresh.start();
 built.runtime.start();
 
-server.listen(config.port, () => {
+server.listen(config.port, config.bindHost, () => {
   console.log(
-    `[qm] listening on :${config.port} (org=${config.orgId}, store=${config.sessionStore}, ` +
+    `[qm] listening on ${config.bindHost ?? "0.0.0.0"}:${config.port} (org=${config.orgId}, store=${config.sessionStore}, ` +
       `runStore=${config.runStore}, workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled}, ` +
       `cronDispatch=${config.cronDispatchEnabled})`,
   );
