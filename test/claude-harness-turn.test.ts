@@ -2,6 +2,7 @@ import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
+import type { ModelCallUsage } from "../src/model/model-gateway.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
 
@@ -68,11 +69,13 @@ function resultMessage(text: string, overrides: Record<string, unknown> = {}): F
 function harnessTurn(overrides: Partial<HarnessTurnInput> = {}): {
   turn: HarnessTurnInput;
   entries: SessionEntry[];
-  modelCalls: Array<{ model: string; inputTokens: number; entryCount: number }>;
+  modelCalls: ModelCallUsage[];
+  usageRecords: ModelCallUsage[];
   llmRequests: HarnessLlmRequestRecord[];
 } {
   const entries: SessionEntry[] = [];
-  const modelCalls: Array<{ model: string; inputTokens: number; entryCount: number }> = [];
+  const modelCalls: ModelCallUsage[] = [];
+  const usageRecords: ModelCallUsage[] = [];
   const llmRequests: HarnessLlmRequestRecord[] = [];
   const scope = "org:test" as unknown as ScopeId;
   const turn: HarnessTurnInput = {
@@ -97,12 +100,15 @@ function harnessTurn(overrides: Partial<HarnessTurnInput> = {}): {
     recordModelCall: (rec) => {
       modelCalls.push(rec);
     },
+    recordUsage: (rec) => {
+      usageRecords.push(rec);
+    },
     recordLlmRequest: (rec) => {
       llmRequests.push(rec);
     },
     ...overrides,
   };
-  return { turn, entries, modelCalls, llmRequests };
+  return { turn, entries, modelCalls, usageRecords, llmRequests };
 }
 
 test("a steered turn persists every reply, not only the last result's", async () => {
@@ -168,7 +174,7 @@ test("model calls are counted per API response and charged their real input toke
   };
 
   const harness = createClaudeHarness({});
-  const { turn, modelCalls } = harnessTurn();
+  const { turn, modelCalls, usageRecords } = harnessTurn();
   const result = await harness.turns.runTurn(turn);
 
   assert.equal(result.modelCalls, 2);
@@ -176,6 +182,18 @@ test("model calls are counted per API response and charged their real input toke
     modelCalls.map((call) => call.inputTokens),
     [100_502, 28_751],
   );
+  // The cache split rides along with each call so the budget can price it properly instead of
+  // charging cached history at the fresh-input rate.
+  assert.deepEqual(
+    modelCalls.map((call) => [call.cacheReadTokens, call.cacheWriteTokens]),
+    [
+      [100_000, 500],
+      [28_750, 0],
+    ],
+  );
+  // Output is reported once per step, after the totals settle, on the separate usage channel —
+  // the model-call audit above stays one row per API response.
+  assert.deepEqual(usageRecords, [{ model: "claude-opus-5", inputTokens: 0, outputTokens: 50, entryCount: 0 }]);
   assert.deepEqual(result.cacheUsage, { cacheRead: 128_750, cacheWrite: 500, uncachedInput: 3 });
 });
 

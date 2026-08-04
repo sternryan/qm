@@ -1,11 +1,20 @@
 import type { ScopeId } from "../types.ts";
 
-interface ModelCallRecord {
-  at: number;
-  scopeLabel: ScopeId;
+// What one model call cost us, in tokens. `inputTokens` is the whole billed prompt —
+// cacheReadTokens and cacheWriteTokens are subsets of it, not additions to it. Harnesses that
+// cannot see a cache breakdown leave them unset and are priced as all-fresh input, as before.
+export interface ModelCallUsage {
   model: string;
   inputTokens: number;
   entryCount: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  outputTokens?: number;
+}
+
+interface ModelCallRecord extends ModelCallUsage {
+  at: number;
+  scopeLabel: ScopeId;
 }
 
 export interface ModelGateway {

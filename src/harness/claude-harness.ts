@@ -542,6 +542,15 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       );
       const sawCalls = stepCallIds.size > 0;
       stepCallIds = new Set();
+      // Output tokens for this step, now that they are final. Prompt tokens were already
+      // reported per call above, so they are zeroed here to avoid billing them twice.
+      if (sawCalls && stepUsage.output > 0)
+        turn.recordUsage?.({
+          model,
+          inputTokens: 0,
+          outputTokens: stepUsage.output,
+          entryCount: turn.history.length,
+        });
       const totalCostUsd = message.total_cost_usd ?? 0;
       const costUsd = Math.max(0, totalCostUsd - lastTotalCostUsd);
       if (sawCalls) lastTotalCostUsd = Math.max(lastTotalCostUsd, totalCostUsd);
@@ -600,9 +609,15 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
             );
             stepCallIds.add(message.message.id);
             if (!known)
+              // Prompt-side usage is settled the first time we see a message id, so it is
+              // recorded here. Output tokens are not — they grow across repeat sightings of the
+              // same id, which is what the Math.max merge above is for — so they are reported
+              // once per step from recordStep, where the totals are final.
               turn.recordModelCall({
                 model,
                 inputTokens: seen.input + seen.cacheRead + seen.cacheWrite,
+                cacheReadTokens: seen.cacheRead,
+                cacheWriteTokens: seen.cacheWrite,
                 entryCount: turn.history.length,
               });
           }

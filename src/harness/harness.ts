@@ -9,6 +9,7 @@ import type {
   TapeRecord,
 } from "../sessions/session-store.ts";
 export type { GapWork } from "../sessions/session-store.ts";
+import type { ModelCallUsage } from "../model/model-gateway.ts";
 import type { OverheardEntryPayload } from "./replay.ts";
 import type { ToolContext } from "../tools/primitives.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
@@ -37,7 +38,7 @@ export interface HarnessLlmRequestRecord {
 interface HarnessSecurityScreenInput {
   payload: string;
   signal: AbortSignal;
-  recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
+  recordModelCall(rec: ModelCallUsage): void;
   recordLlmRequest?(rec: HarnessLlmRequestRecord): void | Promise<void>;
 }
 
@@ -79,7 +80,10 @@ export interface HarnessTurnInput {
   tapeFold?: unknown[];
   scopeLabel: ScopeId;
   orgScopeId: ScopeId;
-  recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
+  recordModelCall(rec: ModelCallUsage): void;
+  // Billable usage that is only final after a call has finished — output tokens. Kept separate
+  // from recordModelCall so the model-call audit stays one row per API response.
+  recordUsage?(rec: ModelCallUsage): void;
   recordLlmRequest?(rec: HarnessLlmRequestRecord): void | Promise<void>;
   onProgress?(p: { toolCalls: number; tokens?: number }): void;
   onGapWork?(sink: (work: GapWork) => void): void;
@@ -115,7 +119,7 @@ export interface HarnessDetectInput {
   systemPrompt: string;
   reactionGuidance?: string;
   history: SessionEntry[];
-  recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
+  recordModelCall(rec: ModelCallUsage): void;
 }
 
 export interface HarnessDetectResult {
@@ -127,7 +131,7 @@ export interface HarnessDetectResult {
 export interface HarnessCompactInput {
   session: Session;
   history: SessionEntry[];
-  recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
+  recordModelCall(rec: ModelCallUsage): void;
 }
 
 interface HarnessTurnController {

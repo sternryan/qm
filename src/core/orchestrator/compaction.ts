@@ -15,7 +15,7 @@ import {
   planCompaction,
   recentEntryCountWithinBudget,
 } from "../../harness/context-compaction.ts";
-import { estimateCostUsd } from "../../ratelimit/budget.ts";
+import { estimateCallCostUsd } from "../../ratelimit/budget.ts";
 import { errMessage, swallow } from "../../util/errors.ts";
 import { createKeyedQueue, sleep } from "../../util/async.ts";
 import type { OrchestratorDeps } from "./types.ts";
@@ -120,7 +120,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
       history: plan.toSummarize,
       recordModelCall: (rec) => {
         deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: summaryLabel, ...rec });
-        void deps.budget?.record(input.actorId, estimateCostUsd(rec.inputTokens));
+        void deps.budget?.record(input.actorId, estimateCallCostUsd(rec));
       },
     });
     return {

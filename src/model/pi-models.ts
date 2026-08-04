@@ -270,3 +270,11 @@ export function defaultInteractiveThinkingLevel(model: Pick<PiModel, "api" | "pr
 }
 
 export const DEFAULT_AGENT_INPUT_USD_PER_MTOK = 5;
+
+// Anthropic prices the other usage components as fixed ratios of a model's input rate, and
+// holds those ratios across the whole lineup (Opus 5 $5/$25, Sonnet 5 $3/$15, Haiku 4.5 $1/$5).
+// Expressing them as ratios means the meter stays right without pinning an absolute price per
+// model. Cache-write is the 5-minute-TTL rate; the 1h TTL would be 2x, which we do not use.
+export const CACHE_READ_COST_RATIO = 0.1;
+export const CACHE_WRITE_COST_RATIO = 1.25;
+export const OUTPUT_COST_RATIO = 5;

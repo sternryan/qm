@@ -3,7 +3,7 @@ import type { ScopeId } from "../../types.ts";
 import type { TurnOrigin } from "../turn-origin.ts";
 import { runShadowScreen, type SecurityScreenHook } from "../../security/security-screener.ts";
 import { UNSCREENED_REASON, type SecurityScreenVerdict } from "../../security/security-posture.ts";
-import { estimateCostUsd } from "../../ratelimit/budget.ts";
+import { estimateCallCostUsd } from "../../ratelimit/budget.ts";
 import type { HarnessLlmRequestRecord, HarnessModelUtilities } from "../../harness/harness.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { sleep } from "../../util/async.ts";
@@ -53,7 +53,7 @@ export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassi
           signal: abort.signal,
           recordModelCall: (rec) => {
             deps.modelGateway.recordCall({ at: Date.now(), scopeLabel, ...rec });
-            void deps.budget?.record(actorId, estimateCostUsd(rec.inputTokens));
+            void deps.budget?.record(actorId, estimateCallCostUsd(rec));
           },
           ...(recordLlmRequest ? { recordLlmRequest } : {}),
         });
