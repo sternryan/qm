@@ -38,6 +38,7 @@ export interface OpenCodeHarnessOptions {
   turnWallClockMs?: number;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
+  corpusReaders?: Record<string, string>;
   backgroundJobTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
   signals?: RunSignalStore;
@@ -100,6 +101,7 @@ function toolOptions(opts: OpenCodeHarnessOptions, turn?: HarnessTurnInput): PiT
     execTimeoutCeilingMs: opts.execTimeoutCeilingMs,
     backgroundJobTtlMs: opts.backgroundJobTtlMs,
     backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs,
+    ...(opts.corpusReaders ? { corpusReaders: opts.corpusReaders } : {}),
     ...(turn
       ? { readOnly: turn.readOnly, surfaceTools: turn.surfaceTools, surfaceName: turn.surfaceName }
       : { surfaceTools: true, surfaceName: "slack" }),

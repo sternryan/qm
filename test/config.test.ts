@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import { baseModelProviders, boolEnv, loadConfig, numEnv, CONFIG_DEFAULTS } from "../src/config.ts";
 import { piHarnessConfigOptions } from "../src/harness/pi-harness.ts";
+import { claudeHarnessConfigOptions } from "../src/harness/claude-harness.ts";
+import { codexHarnessConfigOptions } from "../src/harness/codex-harness.ts";
+import { openCodeHarnessConfigOptions } from "../src/harness/opencode-harness.ts";
 
 const productionEnv = {
   NODE_ENV: "production",
@@ -454,4 +457,13 @@ test("CORPUS_READERS rejects a malformed entry rather than silently dropping it"
 test("CORPUS_READERS reaches the pi harness options, not just Config", () => {
   const config = loadConfig({ ...productionEnv, CORPUS_READERS: "personal:a=http://127.0.0.1:8099" });
   assert.deepEqual(piHarnessConfigOptions(config).corpusReaders, { "personal:a": "http://127.0.0.1:8099" });
+});
+
+test("CORPUS_READERS reaches EVERY harness, not just the one that was tested", () => {
+  const config = loadConfig({ ...productionEnv, CORPUS_READERS: "personal:a=http://127.0.0.1:8099" });
+  const want = { "personal:a": "http://127.0.0.1:8099" };
+  assert.deepEqual(piHarnessConfigOptions(config).corpusReaders, want);
+  assert.deepEqual(claudeHarnessConfigOptions(config).corpusReaders, want);
+  assert.deepEqual(codexHarnessConfigOptions(config).corpusReaders, want);
+  assert.deepEqual(openCodeHarnessConfigOptions(config).corpusReaders, want);
 });

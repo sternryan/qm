@@ -31,6 +31,7 @@ export interface CodexHarnessOptions {
   turnWallClockMs?: number;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
+  corpusReaders?: Record<string, string>;
   backgroundJobTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
   appServerStartTimeoutMs?: number;
@@ -231,6 +232,7 @@ function toolOptions(opts: CodexHarnessOptions, turn?: HarnessTurnInput): PiTool
     execTimeoutCeilingMs: opts.execTimeoutCeilingMs,
     backgroundJobTtlMs: opts.backgroundJobTtlMs,
     backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs,
+    ...(opts.corpusReaders ? { corpusReaders: opts.corpusReaders } : {}),
     ...(turn
       ? { readOnly: turn.readOnly, surfaceTools: turn.surfaceTools, surfaceName: turn.surfaceName }
       : { surfaceTools: true, surfaceName: "slack" }),
