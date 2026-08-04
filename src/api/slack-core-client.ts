@@ -48,11 +48,15 @@ interface DirectoryPush {
   channelMembers?: Array<{ channelId: string; principalId: string }>;
   groupMembers?: Array<{ groupId: string; principalId: string }>;
   workspaceUrl?: string;
+  membersSyncedAt?: number;
+  channelsSyncedAt?: number;
+  groupsSyncedAt?: number;
 }
 
 export interface SlackCoreClient {
   externalSlackParticipants(): Promise<boolean>;
-  effectiveModelName(scope: ScopeId): Promise<string>;
+  surfaceHeaderFacts(scope: ScopeId): Promise<{ agentLabel?: string; modelName: string }>;
+  onScopeModelChanged(listener: (scope: ScopeId) => void): void;
   stageBlob(bytes: Uint8Array): Promise<{ blobId: string; sizeBytes: number }>;
   readBlob(blobId: string): Promise<Buffer>;
   readFileArtifact(artifactId: string, viewerId: string): Promise<Buffer>;
@@ -109,6 +113,11 @@ export interface SlackCoreClientDeps {
   pickAckEmoji?(scopeLabel: ScopeId, text: string, candidates: readonly string[]): Promise<string | undefined>;
   ackPicks?: AckEmojiPickStore;
   ackModelId?: (scopeLabel: ScopeId) => Promise<string | undefined>;
+  brandingDefault?: { selfLabel?: string };
+}
+
+function agentLabelFrom(raw: string | undefined): string | undefined {
+  return raw?.replace(/[\u0000-\u001F\u007F-\u009F\u2028\u2029]/g, "").slice(0, 40) || undefined;
 }
 
 const RUN_FALLBACK_POLL_MS = 1_000;
@@ -126,9 +135,17 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       return (await deps.config.getExternalSlackParticipantsDurable(orgScope)) === true;
     },
 
-    async effectiveModelName(scope) {
-      const choice = await resolveRuntimeChoiceDurable(deps.config, orgScope, scope, deps.runtimeFallback);
-      return modelDisplayName(choice.modelId);
+    async surfaceHeaderFacts(scope) {
+      const [choice, branding] = await Promise.all([
+        resolveRuntimeChoiceDurable(deps.config, orgScope, scope, deps.runtimeFallback),
+        deps.config.getBrandingDurable(orgScope),
+      ]);
+      const agentLabel = agentLabelFrom(branding?.selfLabel ?? deps.brandingDefault?.selfLabel);
+      return { ...(agentLabel ? { agentLabel } : {}), modelName: modelDisplayName(choice.modelId) };
+    },
+
+    onScopeModelChanged(listener) {
+      deps.config.onRuntimeSelectionChanged((scope) => listener(scope));
     },
 
     async stageBlob(bytes) {
@@ -282,9 +299,9 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
 
     async pushDirectory(body) {
       if (body.workspaceUrl) await deps.app.setDirectoryWorkspaceUrl(body.workspaceUrl);
-      if (body.members) await deps.app.upsertDirectory(body.members);
-      if (body.channels) await deps.app.upsertChannels(body.channels, body.channelMembers);
-      if (body.groupMembers) await deps.app.upsertGroups(body.groupMembers);
+      if (body.members) await deps.app.upsertDirectory(body.members, body.membersSyncedAt);
+      if (body.channels) await deps.app.upsertChannels(body.channels, body.channelMembers, body.channelsSyncedAt);
+      if (body.groupMembers) await deps.app.upsertGroups(body.groupMembers, body.groupsSyncedAt);
     },
 
     claimDeliveries(type, claimMs) {

@@ -13,7 +13,7 @@ import type { OutgoingAttachment } from "../types.ts";
 import type { Readable } from "node:stream";
 import { type FileArtifact, type FileArtifactStore, type ListOwnedOptions } from "../files/file-artifact-store.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
-import type { SessionStore } from "../sessions/session-store.ts";
+import type { SessionStore, TranscriptEntry } from "../sessions/session-store.ts";
 import { type Sandbox } from "../sandbox/sandbox.ts";
 import type { ProcessRegistry } from "../processes/process-registry.ts";
 import type { MonitorStore } from "../monitors/monitor-store.ts";
@@ -147,6 +147,7 @@ interface ReachNowInput {
   recipient?: string;
   channel?: string;
   participants?: readonly string[];
+  threadTs?: string;
   unfurlLinks?: boolean;
   attachments?: OutgoingAttachment[];
   react?: { messageTs: string; emoji: string };
@@ -238,17 +239,26 @@ export interface App {
     finishedAt: number | null;
   } | null>;
   activeRunForThread(threadRef: string, viewer?: string): Promise<{ runId: string } | null>;
-  signalRun(runId: string, signal: RunSignal, viewer?: string): Promise<{ accepted: boolean; reason?: string }>;
+  signalRun(
+    runId: string,
+    signal: RunSignal,
+    viewer?: string,
+  ): Promise<{ accepted: boolean; reason?: string; replayed?: boolean }>;
   replayOrphanedRunSignals(runId: string): Promise<void>;
   getSession(
     sessionId: string,
     window?: TranscriptWindow,
-  ): Promise<{ session: Session; entries: SessionEntry[]; earlierEntries?: number } | null>;
+  ): Promise<{ session: Session; entries: TranscriptEntry[]; earlierEntries?: number } | null>;
   getSessionForViewer(
     sessionId: string,
     principalId: string,
     window?: TranscriptWindow,
-  ): Promise<{ session: Session; entries: SessionEntry[]; earlierEntries?: number } | null>;
+  ): Promise<{ session: Session; entries: TranscriptEntry[]; earlierEntries?: number } | null>;
+  getSessionEntryForViewer(
+    sessionId: string,
+    principalId: string,
+    seq: number,
+  ): Promise<{ entry: SessionEntry } | null>;
   listSessions(principalId: string): Promise<Session[]>;
   sessionBackground(sessionId: string, viewer: string): Promise<SessionBackgroundView | null>;
   readSessionBackgroundOutput(
@@ -349,9 +359,9 @@ export interface App {
   ackDelivery(id: string, slackApiMs?: number): Promise<void>;
   ackDeliveryByKey(idempotencyKey: string): Promise<void>;
   setRunDeliveryState(runId: string, state: RunDeliveryState): Promise<boolean>;
-  upsertDirectory(members: DirectoryMember[]): Promise<void>;
-  upsertChannels(channels: DirectoryChannel[], channelMembers?: ChannelMembership[]): Promise<void>;
-  upsertGroups(groupMembers: GroupMembership[]): Promise<void>;
+  upsertDirectory(members: DirectoryMember[], syncedAt?: number): Promise<void>;
+  upsertChannels(channels: DirectoryChannel[], channelMembers?: ChannelMembership[], syncedAt?: number): Promise<void>;
+  upsertGroups(groupMembers: GroupMembership[], syncedAt?: number): Promise<void>;
   setDirectoryWorkspaceUrl(url: string): Promise<void>;
   directoryMeta(): Promise<DirectoryMeta>;
   resolveRecipient(query: string): Promise<RecipientResolution>;
