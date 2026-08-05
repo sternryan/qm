@@ -31,7 +31,13 @@ import type { ScopeId, SessionEntry } from "../types.ts";
 import { swallow } from "../util/errors.ts";
 import { parseSecurityScreenVerdict, SECURITY_SCREEN_SYSTEM_PROMPT } from "../security/security-posture.ts";
 import { compactTranscript, deterministicCompactSummary } from "./context-compaction.ts";
-import { defineHarness, type Harness, type HarnessTurnInput, type HarnessTurnResult } from "./harness.ts";
+import {
+  defineHarness,
+  type Harness,
+  type HarnessModelUtilities,
+  type HarnessTurnInput,
+  type HarnessTurnResult,
+} from "./harness.ts";
 import {
   buildDetectionPrompt,
   CONTEXT_COMPACTION_PROMPT,
@@ -883,61 +889,59 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     }
   };
 
-  const single = async (
-    systemPrompt: string,
-    prompt: string,
-    signal?: AbortSignal,
-    observe?: Pick<HarnessTurnInput, "recordModelCall" | "recordLlmRequest">,
-    modelOverride?: string,
-  ): Promise<string | undefined> => {
-    const session = { id: `oneshot-${randomBytes(8).toString("hex")}` } as HarnessTurnInput["session"];
-    const scope = { kind: "org", id: "oneshot" } as unknown as ScopeId;
-    const emitted: SessionEntry[] = [];
-    const result = await runPrompt(
-      {
-        session,
-        input: prompt,
-        systemPrompt,
-        history: [],
-        tools: {} as HarnessTurnInput["tools"],
-        scopeLabel: scope,
-        orgScopeId: scope,
-        ...(signal ? { cancel: signal } : {}),
-        ...(modelOverride ? { model: modelOverride } : {}),
-        readOnly: true,
-        emit: async (entry) => {
-          const saved = {
-            ...entry,
-            sessionId: session.id,
-            seq: emitted.length + 1,
-            createdAt: Date.now(),
-          } as SessionEntry;
-          emitted.push(saved);
-          return saved;
+  // A oneshot bills whichever credential its scope resolves to. Bound to a real scope
+  // (via modelsFor below) it obeys the same credential policy a turn does; only a
+  // oneshot with no scope to attribute -- there is no turn behind it -- falls back to
+  // the internal scope that isInternalClaudeScope() exempts. Never widen that fallback:
+  // a scope-bearing call landing on it spends the deployment owner's subscription.
+  const singleFor =
+    (scopeLabel?: ScopeId) =>
+    async (
+      systemPrompt: string,
+      prompt: string,
+      signal?: AbortSignal,
+      observe?: Pick<HarnessTurnInput, "recordModelCall" | "recordLlmRequest">,
+      modelOverride?: string,
+    ): Promise<string | undefined> => {
+      const session = { id: `oneshot-${randomBytes(8).toString("hex")}` } as HarnessTurnInput["session"];
+      const scope = scopeLabel ?? ({ kind: "org", id: "oneshot" } as unknown as ScopeId);
+      const emitted: SessionEntry[] = [];
+      const result = await runPrompt(
+        {
+          session,
+          input: prompt,
+          systemPrompt,
+          history: [],
+          tools: {} as HarnessTurnInput["tools"],
+          scopeLabel: scope,
+          orgScopeId: scope,
+          ...(signal ? { cancel: signal } : {}),
+          ...(modelOverride ? { model: modelOverride } : {}),
+          readOnly: true,
+          emit: async (entry) => {
+            const saved = {
+              ...entry,
+              sessionId: session.id,
+              seq: emitted.length + 1,
+              createdAt: Date.now(),
+            } as SessionEntry;
+            emitted.push(saved);
+            return saved;
+          },
+          recordModelCall: observe?.recordModelCall ?? (() => {}),
+          ...(observe?.recordLlmRequest ? { recordLlmRequest: observe.recordLlmRequest } : {}),
         },
-        recordModelCall: observe?.recordModelCall ?? (() => {}),
-        ...(observe?.recordLlmRequest ? { recordLlmRequest: observe.recordLlmRequest } : {}),
-      },
-      false,
-    );
-    return result.reply || undefined;
-  };
+        false,
+      );
+      return result.reply || undefined;
+    };
 
-  return defineHarness(
-    {
-      id: "claude",
-      controlTransport: "sdk",
-      toolTransport: "in-process-mcp",
-      transcriptFormat: "claude-agent-sdk",
-      capabilities: new Set(["abort", "steer", "images", "thinking-level", "fast-mode"]),
-    },
-    {
-      runTurn: runPrompt,
-      close: () => {
-        for (const sdkQuery of active) sdkQuery.close();
-        active.clear();
-      },
-      resetSession: () => {},
+  // Every model utility is a function of the scope it serves, because each one spends
+  // that scope's Claude credential. Built once per scope by modelsFor(); the no-scope
+  // build backs the plain "models" field for callers with no turn to attribute.
+  const modelUtilities = (boundScope?: ScopeId): HarnessModelUtilities => {
+    const single = singleFor(boundScope);
+    return {
       async shouldRespond(detect) {
         try {
           const out = await single(
@@ -985,6 +989,26 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           "Explain this command in one plain-English sentence for an approver.",
           [command, reason, purpose].filter(Boolean).join("\n"),
         ),
+    };
+  };
+
+  const base = defineHarness(
+    {
+      id: "claude",
+      controlTransport: "sdk",
+      toolTransport: "in-process-mcp",
+      transcriptFormat: "claude-agent-sdk",
+      capabilities: new Set(["abort", "steer", "images", "thinking-level", "fast-mode"]),
+    },
+    {
+      runTurn: runPrompt,
+      close: () => {
+        for (const sdkQuery of active) sdkQuery.close();
+        active.clear();
+      },
+      resetSession: () => {},
+      ...modelUtilities(),
     },
   );
+  return { ...base, modelsFor: (scopeLabel: ScopeId) => modelUtilities(scopeLabel) };
 }

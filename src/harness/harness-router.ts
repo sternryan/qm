@@ -101,9 +101,15 @@ export function createHarnessRouter(
     // every scope's auxiliary calls to silently run on the org fallback
     // harness regardless of that scope's own runtime pin.
     models: utility.models,
+    // Routing to the right ADAPTER is only half of it: an adapter whose auxiliary calls
+    // spend a per-scope credential (claude) must also be told WHICH scope, or its
+    // oneshots fall back to the deployment owner's subscription. Delegate to the
+    // adapter's own modelsFor when it has one; its plain models table is the answer
+    // only for an adapter that cannot vary by scope.
     async modelsFor(scopeLabel) {
       const choice = await resolve({ scopeLabel });
-      return adapters.get(choice.harnessId)?.models ?? utility.models;
+      const adapter = adapters.get(choice.harnessId) ?? utility;
+      return adapter.modelsFor ? await adapter.modelsFor(scopeLabel) : adapter.models;
     },
     tools: utility.tools,
     turns: {
