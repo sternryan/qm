@@ -187,3 +187,53 @@ test("the owner a Claude login loads under is the owner it was captured under", 
   const channel = scopeId("channel", "C1");
   assert.equal(claudeCredentialOwner(channel), deviceFlowCredOwner(channel, "NyrW@github"));
 });
+
+test("a scope's own token credential is used, not just a captured login file", () => {
+  const decision = claudeCredentialDecision({
+    scope: RYN,
+    deploymentScope: RYAN,
+    ownEnv: { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-RYN" },
+  });
+  assert.equal(decision.kind, "own");
+  assert.deepEqual(decision.kind === "own" ? decision.env : null, { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-RYN" });
+});
+
+test("an empty token credential is not a login, so the scope is still refused", () => {
+  assert.equal(claudeCredentialDecision({ scope: RYN, deploymentScope: RYAN, ownEnv: {} }).kind, "refuse");
+});
+
+test("prepare hands the scope's own token back for the child process", async () => {
+  const jail = mkdtempSync(join(tmpdir(), "claude-cred-env-"));
+  try {
+    const result = await prepareClaudeCredentials({
+      scope: RYN,
+      deploymentScope: RYAN,
+      jail,
+      loadOwnEnv: async () => ({ CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-RYN" }),
+    });
+    assert.equal(result.deploymentAuth, false);
+    assert.deepEqual(result.env, { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-RYN" });
+  } finally {
+    rmSync(jail, { recursive: true, force: true });
+  }
+});
+
+test("a captured login file wins over a token credential when a scope somehow has both", async () => {
+  const jail = mkdtempSync(join(tmpdir(), "claude-cred-both-"));
+  try {
+    const result = await prepareClaudeCredentials({
+      scope: RYN,
+      deploymentScope: RYAN,
+      jail,
+      loadOwnFiles: async () => [
+        { path: ".claude/.credentials.json", contentBase64: Buffer.from("{}").toString("base64") },
+      ],
+      loadOwnEnv: async () => ({ CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-RYN" }),
+    });
+    assert.equal(result.deploymentAuth, false);
+    assert.equal(existsSync(join(jail, ".claude/.credentials.json")), true);
+    assert.equal(result.env, undefined);
+  } finally {
+    rmSync(jail, { recursive: true, force: true });
+  }
+});

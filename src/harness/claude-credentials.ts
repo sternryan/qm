@@ -8,10 +8,11 @@ export interface ClaudeCredentialInput {
   scope?: ScopeId;
   deploymentScope?: string;
   ownFiles?: readonly CredentialFile[] | null;
+  ownEnv?: NodeJS.ProcessEnv | null;
 }
 
 export type ClaudeCredentialDecision =
-  | { kind: "own"; files: readonly CredentialFile[] }
+  | { kind: "own"; files?: readonly CredentialFile[]; env?: NodeJS.ProcessEnv }
   | { kind: "deployment" }
   | { kind: "refuse"; reason: string };
 
@@ -21,6 +22,7 @@ export const CLAUDE_NO_CREDENTIAL_REASON =
 
 export function claudeCredentialDecision(input: ClaudeCredentialInput): ClaudeCredentialDecision {
   if (input.ownFiles && input.ownFiles.length > 0) return { kind: "own", files: input.ownFiles };
+  if (input.ownEnv && Object.keys(input.ownEnv).length > 0) return { kind: "own", env: input.ownEnv };
   if (input.scope && input.deploymentScope && String(input.scope) === input.deploymentScope) {
     return { kind: "deployment" };
   }
@@ -41,19 +43,23 @@ export interface PrepareClaudeCredentialsInput {
   identity?: { uid: number; gid: number };
   chown?: (path: string, uid: number, gid: number) => void;
   loadOwnFiles?: (scope: ScopeId) => Promise<readonly CredentialFile[] | null>;
+  loadOwnEnv?: (scope: ScopeId) => Promise<NodeJS.ProcessEnv | null>;
 }
 
 export async function prepareClaudeCredentials(
   input: PrepareClaudeCredentialsInput,
-): Promise<{ deploymentAuth: boolean }> {
+): Promise<{ deploymentAuth: boolean; env?: NodeJS.ProcessEnv }> {
   const ownFiles = input.scope && input.loadOwnFiles ? await input.loadOwnFiles(input.scope) : null;
+  const ownEnv = input.scope && input.loadOwnEnv ? await input.loadOwnEnv(input.scope) : null;
   const decision = claudeCredentialDecision({
     ...(input.scope ? { scope: input.scope } : {}),
     ...(input.deploymentScope ? { deploymentScope: input.deploymentScope } : {}),
     ownFiles,
+    ownEnv,
   });
   if (decision.kind === "refuse") throw new NonRetryableTurnError(decision.reason);
   if (decision.kind === "deployment") return { deploymentAuth: true };
+  if (!decision.files) return { deploymentAuth: false, ...(decision.env ? { env: decision.env } : {}) };
 
   const root = resolve(input.jail);
   for (const file of decision.files) {

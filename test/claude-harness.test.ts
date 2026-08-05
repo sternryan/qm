@@ -167,3 +167,21 @@ test("a real conversation scope is never treated as internal", () => {
 test("a missing scope is not internal, so it is refused rather than waved through", () => {
   assert.equal(isInternalClaudeScope(undefined), false);
 });
+
+test("the scope's own token reaches the child even though the deployment's was withheld", () => {
+  const env = claudeChildEnv({ PATH: "/usr/bin", CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-DEPLOYMENT" }, "/tmp/jail", {
+    deploymentAuth: false,
+    extraEnv: { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-RYN" },
+  });
+  assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, "sk-ant-oat-RYN");
+  assert.equal(env.PATH, "/usr/bin");
+});
+
+test("a scope token cannot be shadowed by the deployment's own credentials", () => {
+  const env = claudeChildEnv({ ANTHROPIC_API_KEY: "sk-ant-DEPLOYMENT" }, "/tmp/jail", {
+    deploymentAuth: false,
+    extraEnv: { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-RYN" },
+  });
+  assert.equal(env.ANTHROPIC_API_KEY, undefined);
+  assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, "sk-ant-oat-RYN");
+});

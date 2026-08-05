@@ -706,6 +706,14 @@ export function buildApp(
     const held = await keychain.materializeOwnFiles(owner);
     return held.find((cred) => cred.service === CLAUDE_CREDENTIAL_SERVICE)?.files ?? null;
   };
+  const loadClaudeCredentialEnv = async (scope: ScopeId) => {
+    if (!keychain) return null;
+    const owner = claudeCredentialOwner(scope);
+    const held = await keychain.materializeOwn(owner);
+    const entries = held.find((cred) => cred.service === CLAUDE_CREDENTIAL_SERVICE)?.env;
+    if (!entries?.length) return null;
+    return Object.fromEntries(entries.map(({ key, value }) => [key, value])) as NodeJS.ProcessEnv;
+  };
   const adapters = new Map<HarnessId, Harness>([
     [
       "pi",
@@ -723,6 +731,7 @@ export function buildApp(
       createClaudeHarness({
         ...claudeHarnessConfigOptions(config),
         ...(keychain ? { loadOwnCredentials: loadClaudeCredentials } : {}),
+        ...(keychain ? { loadOwnCredentialEnv: loadClaudeCredentialEnv } : {}),
         signals: runSignals,
         tasks,
       }),

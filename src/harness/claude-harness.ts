@@ -51,6 +51,7 @@ export interface ClaudeHarnessOptions {
   env?: NodeJS.ProcessEnv;
   deploymentCredentialScope?: string;
   loadOwnCredentials?: (scope: ScopeId) => Promise<readonly CredentialFile[] | null>;
+  loadOwnCredentialEnv?: (scope: ScopeId) => Promise<NodeJS.ProcessEnv | null>;
   scratchExec?: boolean;
   ownerAuthExec?: boolean;
   reachExec?: boolean;
@@ -135,13 +136,16 @@ export const CLAUDE_DEPLOYMENT_AUTH_ENV: readonly string[] = [
 export function claudeChildEnv(
   source: NodeJS.ProcessEnv,
   jail: string,
-  options: { deploymentAuth?: boolean } = {},
+  options: { deploymentAuth?: boolean; extraEnv?: NodeJS.ProcessEnv } = {},
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { HOME: jail, CLAUDE_CONFIG_DIR: join(jail, ".claude") };
   const deploymentAuth = options.deploymentAuth !== false;
   for (const name of CLAUDE_ENV_PASSTHROUGH) {
     if (!deploymentAuth && CLAUDE_DEPLOYMENT_AUTH_ENV.includes(name)) continue;
     if (source[name] !== undefined) env[name] = source[name];
+  }
+  for (const [name, value] of Object.entries(options.extraEnv ?? {})) {
+    if (value !== undefined) env[name] = value;
   }
   return env;
 }
@@ -354,14 +358,16 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     const processIdentity = claudeProcessIdentity();
     if (processIdentity) chownSync(jail, processIdentity.uid, processIdentity.gid);
     let deploymentAuth = true;
+    let scopeCredentialEnv: NodeJS.ProcessEnv | undefined;
     if (opts.deploymentCredentialScope && !isInternalClaudeScope(turn.scopeLabel)) {
       try {
-        ({ deploymentAuth } = await prepareClaudeCredentials({
+        ({ deploymentAuth, env: scopeCredentialEnv } = await prepareClaudeCredentials({
           ...(turn.scopeLabel ? { scope: turn.scopeLabel } : {}),
           deploymentScope: opts.deploymentCredentialScope,
           jail,
           ...(processIdentity ? { identity: processIdentity } : {}),
           ...(opts.loadOwnCredentials ? { loadOwnFiles: opts.loadOwnCredentials } : {}),
+          ...(opts.loadOwnCredentialEnv ? { loadOwnEnv: opts.loadOwnCredentialEnv } : {}),
         }));
       } catch (error) {
         rmSync(jail, { recursive: true, force: true });
@@ -469,7 +475,10 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       options: {
         abortController: controller,
         cwd: jail,
-        env: claudeChildEnv(opts.env ?? {}, jail, { deploymentAuth }),
+        env: claudeChildEnv(opts.env ?? {}, jail, {
+          deploymentAuth,
+          ...(scopeCredentialEnv ? { extraEnv: scopeCredentialEnv } : {}),
+        }),
         tools: allowSubagents ? ["Agent"] : [],
         skills: [],
         settingSources: [],
